@@ -1,0 +1,31 @@
+{
+  "name": "@fleetline/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:integration": "vitest run",
+    "migrate": "node-pg-migrate -m migrations up",
+    "migrate:down": "node-pg-migrate -m migrations down",
+    "migrate:create": "node-pg-migrate -m migrations create"
+  },
+  "dependencies": {
+    "node-pg-migrate": "^7.6.0",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^10.13.0",
+    "@testcontainers/redis": "^10.13.0",
+    "@types/pg": "^8.11.0",
+    "ioredis": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}
