@@ -18,3 +18,11 @@ export interface RideRequest {
 }
 
 export type SimMessage = DriverPing | RideRequest;
+
+/**
+ * Request intake queue (gateway → matcher), Redis lists. The gateway LPUSHes
+ * ride-request ids after persisting the row; matcher consumers BLMOVE from
+ * the RIGHT into the processing list (FIFO, at-least-once).
+ */
+export const REQUESTS_QUEUE = 'requests:queue';
+export const REQUESTS_PROCESSING = 'requests:processing';

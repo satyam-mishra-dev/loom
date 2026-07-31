@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude '**/*.integration.test.ts'",
-    "test:integration": "vitest run geo-index.integration"
+    "test:integration": "vitest run integration.test"
   },
   "dependencies": {
     "h3-js": "^4.1.0",

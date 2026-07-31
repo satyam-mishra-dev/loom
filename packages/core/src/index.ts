@@ -1,3 +1,6 @@
 export * from './geo.js';
 export * from './geo-index.js';
 export * from './messages.js';
+export * from './claim.js';
+export * from './scoring.js';
+export * from './metrics.js';
