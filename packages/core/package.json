@@ -12,12 +12,15 @@
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run geo-index.integration"
   },
   "dependencies": {
-    "h3-js": "^4.1.0"
+    "h3-js": "^4.1.0",
+    "ioredis": "^5.4.0"
   },
   "devDependencies": {
+    "@testcontainers/redis": "^10.13.0",
     "vitest": "^3.0.0"
   }
 }
