@@ -8,13 +8,17 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
-    "test": "vitest run"
+    "test": "vitest run --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run gateway.integration"
   },
   "dependencies": {
+    "@fleetline/core": "*",
     "fastify": "^5.0.0",
+    "ioredis": "^5.4.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@testcontainers/redis": "^10.13.0",
     "@types/ws": "^8.5.12",
     "vitest": "^3.0.0"
   }
