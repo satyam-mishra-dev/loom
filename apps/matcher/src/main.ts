@@ -1,16 +1,60 @@
+import Fastify from 'fastify';
+import { Redis } from 'ioredis';
 import { pino } from 'pino';
+import { createPool } from '@fleetline/db';
+import { MatcherCore } from './matcher.js';
+import { renderMetrics } from './metrics.js';
 
-// Minimal entry: the matching pipeline (candidate search, scoring, atomic
-// claim) lands in later phases per the build doc.
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got "${raw}"`);
+  return n;
+}
+
+const port = envInt('PORT', 8090);
+const consumers = envInt('MATCHER_CONSUMERS', 4);
+const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
+const databaseUrl =
+  process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
+
 const log = pino({ name: 'matcher' });
+const redis = new Redis(redisUrl);
+const pool = createPool(databaseUrl);
 
-log.info('matcher started; matching pipeline arrives in a later phase');
+const core = new MatcherCore({
+  redis,
+  pool,
+  log,
+  need: envInt('MATCH_NEED', 8),
+  maxK: envInt('MATCH_MAX_K', 3),
+  freshMs: envInt('FRESH_MS', 10_000),
+  claimTtlMs: envInt('CLAIM_TTL_MS', 8_000),
+});
 
-const shutdown = (): void => {
+const app = Fastify({ logger: false });
+app.get('/healthz', () => ({ status: 'ok' }));
+app.get('/metrics', (_req, reply) => {
+  void reply.type('text/plain; version=0.0.4');
+  return renderMetrics(core.metrics);
+});
+
+let shuttingDown = false;
+const shutdown = async (): Promise<void> => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info('shutting down');
+  await core.stop(); // finishes in-flight matches, ≤ ~1s
+  await app.close();
+  await pool.end();
+  redis.disconnect();
   log.info('matcher stopped');
   process.exit(0);
 };
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => void shutdown());
+process.on('SIGTERM', () => void shutdown());
 
-setInterval(() => log.debug('idle'), 60_000);
+await app.listen({ port, host: '0.0.0.0' });
+await core.start(consumers);
+log.info({ port, consumers }, 'matcher started');
