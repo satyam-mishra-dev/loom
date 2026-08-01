@@ -2,8 +2,9 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Redis } from 'ioredis';
+import type pg from 'pg';
 import { WebSocket, WebSocketServer } from 'ws';
-import { GeoIndex, type GeoPing } from '@fleetline/core';
+import { GeoIndex, REQUESTS_QUEUE, type GeoPing } from '@fleetline/core';
 import { verifyToken } from './auth.js';
 import { createMetrics, renderMetrics, type GatewayMetrics } from './metrics.js';
 
@@ -11,6 +12,13 @@ export interface GatewayOptions {
   redis: Redis;
   /** HMAC secret for the auth-lite token scheme — see auth.ts. */
   secret: string;
+  /**
+   * Postgres pool for ride-request intake — the gateway owns intake
+   * persistence (row first, then queue). Optional so a drivers-only gateway
+   * (and the phase-A/B tests) can run without Postgres; without it,
+   * ride_requests are counted and dropped.
+   */
+  pool?: pg.Pool;
   logger?: boolean;
   /** Flush the ping buffer after this many ms… (default 50) */
   flushMs?: number;
@@ -46,17 +54,28 @@ export interface Gateway {
   sendToDriver(driverId: string, data: string): boolean;
 }
 
+type InboundMessage =
+  | { kind: 'ping'; ping: GeoPing }
+  | { kind: 'ride_request'; requestId: string; lat: number; lng: number };
+
 /** Shape-check an incoming message. Trust boundary: never assume valid JSON shape. */
-function parseMessage(raw: unknown): GeoPing | 'ride_request' | null {
+function parseMessage(raw: unknown): InboundMessage | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const msg = raw as Record<string, unknown>;
-  if (msg['type'] === 'ride_request') return 'ride_request';
-  if (msg['type'] !== 'driver_ping') return null;
-  const { driverId, lat, lng } = msg;
-  if (typeof driverId !== 'string' || driverId.length === 0) return null;
+  const { lat, lng } = msg;
   if (typeof lat !== 'number' || !Number.isFinite(lat)) return null;
   if (typeof lng !== 'number' || !Number.isFinite(lng)) return null;
-  return { driverId, lat, lng };
+  if (msg['type'] === 'driver_ping') {
+    const driverId = msg['driverId'];
+    if (typeof driverId !== 'string' || driverId.length === 0) return null;
+    return { kind: 'ping', ping: { driverId, lat, lng } };
+  }
+  if (msg['type'] === 'ride_request') {
+    const requestId = msg['requestId'];
+    if (typeof requestId !== 'string' || requestId.length === 0) return null;
+    return { kind: 'ride_request', requestId, lat, lng };
+  }
+  return null;
 }
 
 /**
@@ -69,6 +88,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
   const {
     redis,
     secret,
+    pool,
     flushMs = 50,
     flushMax = 500,
     pingIntervalMs = 25_000,
@@ -123,6 +143,28 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     buffer.push(ping);
     if (buffer.length >= flushMax) void flush();
     else if (flushTimer === null) flushTimer = setTimeout(() => void flush(), flushMs);
+  }
+
+  // ---- ride-request intake: gateway owns persistence, matcher owns matching ----
+  // Row first (committed, status pending), THEN the id onto requests:queue —
+  // the matcher loads the row by id, so it must exist before the id is
+  // poppable. A duplicate WS delivery re-pushes the id but ON CONFLICT keeps
+  // one row, and the matcher's pending→matching row guard makes the second
+  // pop a no-op: at-least-once intake, exactly-once matching.
+  async function intakeRequest(requestId: string, lat: number, lng: number): Promise<void> {
+    if (pool === undefined) return; // drivers-only gateway: counted, not consumed
+    try {
+      await pool.query(
+        `INSERT INTO ride_requests (id, lat, lng, status) VALUES ($1, $2, $3, 'pending')
+         ON CONFLICT (id) DO NOTHING`,
+        [requestId, lat, lng],
+      );
+      await redis.lpush(REQUESTS_QUEUE, requestId);
+      metrics.rideRequestsEnqueuedTotal++;
+    } catch (err) {
+      metrics.rideRequestErrorsTotal++;
+      app.log.error({ err, requestId }, 'ride request intake failed');
+    }
   }
 
   // ---- socket registry + bounded outbound path ----
@@ -203,17 +245,17 @@ export function buildGateway(opts: GatewayOptions): Gateway {
         metrics.invalidMessagesTotal++;
         return;
       }
-      if (msg === 'ride_request') {
-        // Counted but not consumed — the matcher picks these up in phase C.
+      if (msg.kind === 'ride_request') {
         metrics.rideRequestsReceivedTotal++;
+        void intakeRequest(msg.requestId, msg.lat, msg.lng);
         return;
       }
       metrics.pingsReceivedTotal++;
-      if (!boundIds.has(msg.driverId)) {
-        boundIds.add(msg.driverId);
-        driverSockets.set(msg.driverId, socket);
+      if (!boundIds.has(msg.ping.driverId)) {
+        boundIds.add(msg.ping.driverId);
+        driverSockets.set(msg.ping.driverId, socket);
       }
-      enqueue(msg);
+      enqueue(msg.ping);
     });
 
     socket.on('close', () => {

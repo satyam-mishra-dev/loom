@@ -13,12 +13,16 @@
   },
   "dependencies": {
     "@fleetline/core": "*",
+    "@fleetline/db": "*",
     "fastify": "^5.0.0",
     "ioredis": "^5.4.0",
+    "pg": "^8.12.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^10.13.0",
     "@testcontainers/redis": "^10.13.0",
+    "@types/pg": "^8.11.0",
     "@types/ws": "^8.5.12",
     "vitest": "^3.0.0"
   }

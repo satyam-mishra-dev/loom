@@ -2,11 +2,14 @@ import { spawn } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import { Redis } from 'ioredis';
+import type pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { HEARTBEAT_ZSET, cellKey, cellFor, driverKey } from '@fleetline/core';
+import { HEARTBEAT_ZSET, REQUESTS_QUEUE, cellKey, cellFor, driverKey } from '@fleetline/core';
+import { createPool, runMigrations } from '@fleetline/db';
 import { signToken } from '../src/auth.js';
 import { buildGateway, type Gateway, type GatewayOptions } from '../src/server.js';
 
@@ -194,6 +197,68 @@ describe('gateway (testcontainers redis, real sockets)', () => {
     expect(refused).toBe(true);
     expect(gw.metrics.backpressureDisconnectsTotal).toBe(1);
     await waitFor(() => gw.metrics.wsConnectionsActive === 0 && gw.driverSockets.size === 0);
+  });
+
+  describe('ride request intake (adds testcontainers postgres)', () => {
+    let pgContainer: StartedPostgreSqlContainer;
+    let pool: pg.Pool;
+
+    beforeAll(async () => {
+      pgContainer = await new PostgreSqlContainer('postgres:16-alpine').start();
+      await runMigrations(pgContainer.getConnectionUri());
+      pool = createPool(pgContainer.getConnectionUri());
+    }, 180_000);
+
+    afterAll(async () => {
+      await pool.end();
+      await pgContainer.stop();
+    });
+
+    beforeEach(async () => {
+      await pool.query('TRUNCATE ride_requests, trips CASCADE');
+    });
+
+    function request(ws: WebSocket, requestId: string): void {
+      ws.send(JSON.stringify({ type: 'ride_request', requestId, ...CENTER, ts: 0 }));
+    }
+
+    it('persists a pending row, then enqueues the id; duplicates dedupe on the row, not the queue', async () => {
+      const { gw, port } = await startGateway({ pool });
+      const ws = await connect(port, signToken('rider', SECRET));
+      request(ws, 'r1');
+      request(ws, 'r1'); // duplicate delivery
+      request(ws, 'r2');
+
+      await waitFor(() => gw.metrics.rideRequestsEnqueuedTotal === 3);
+      expect(gw.metrics.rideRequestsReceivedTotal).toBe(3);
+      expect(gw.metrics.rideRequestErrorsTotal).toBe(0);
+
+      // Exactly one row per request id, pending, at the request's coordinates.
+      const rows = await pool.query<{ id: string; status: string; lat: number }>(
+        'SELECT id, status, lat FROM ride_requests ORDER BY id',
+      );
+      expect(rows.rows).toEqual([
+        { id: 'r1', status: 'pending', lat: CENTER.lat },
+        { id: 'r2', status: 'pending', lat: CENTER.lat },
+      ]);
+
+      // The queue carries every delivery (at-least-once); the matcher's row
+      // guard is what collapses the duplicate.
+      const queued = await redis.lrange(REQUESTS_QUEUE, 0, -1);
+      expect(queued.sort()).toEqual(['r1', 'r1', 'r2']);
+    });
+
+    it('malformed ride_requests are invalid, not intake errors', async () => {
+      const { gw, port } = await startGateway({ pool });
+      const ws = await connect(port, signToken('rider', SECRET));
+      ws.send(JSON.stringify({ type: 'ride_request', lat: CENTER.lat, lng: CENTER.lng })); // no id
+      ws.send(JSON.stringify({ type: 'ride_request', requestId: 'r9', lat: 'x', lng: 0 }));
+      request(ws, 'ok');
+
+      await waitFor(() => gw.metrics.rideRequestsEnqueuedTotal === 1);
+      expect(gw.metrics.invalidMessagesTotal).toBe(2);
+      expect(await redis.lrange(REQUESTS_QUEUE, 0, -1)).toEqual(['ok']);
+    });
   });
 
   it('E2E: real simulator over --sink ws indexes the whole fleet with coherent metrics', async () => {
