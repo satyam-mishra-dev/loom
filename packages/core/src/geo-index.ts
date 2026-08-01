@@ -43,6 +43,38 @@ export function cellKey(cell: string): string {
   return `cell:${cell}:available`;
 }
 
+// KEYS[1] driver:{id}
+// ARGV[1] driverId  ARGV[2] cell  ARGV[3] lat  ARGV[4] lng  ARGV[5] nowMs
+//
+// One ping applied ATOMICALLY. The status check and the writes it guards must
+// be one uninterruptible step: a read-pipeline-then-MULTI version of this had
+// a window in which a matcher's claim landed between the read ('available')
+// and the write — and the write clobbered the driver straight back to
+// available and re-SADDed it, making one driver claimable twice. With the
+// offer cascade holding claims for whole seconds while pings stream in
+// continuously, that window fired constantly (caught by the smoke run's
+// pg_unique_violations counter — the defense-in-depth index doing its job).
+const APPLY_PING_LUA = `
+local status = redis.call('HGET', KEYS[1], 'status')
+if not status or status == 'available' or status == 'offline' then
+  local prevCell = redis.call('HGET', KEYS[1], 'cell')
+  if status == 'available' and prevCell and prevCell ~= ARGV[2] then
+    redis.call('SREM', 'cell:' .. prevCell .. ':available', ARGV[1])
+  end
+  redis.call('SADD', 'cell:' .. ARGV[2] .. ':available', ARGV[1])
+  redis.call('HSET', KEYS[1], 'cell', ARGV[2], 'status', 'available',
+    'lat', ARGV[3], 'lng', ARGV[4], 'heartbeatMs', ARGV[5])
+else
+  redis.call('HSET', KEYS[1], 'cell', ARGV[2],
+    'lat', ARGV[3], 'lng', ARGV[4], 'heartbeatMs', ARGV[5])
+end
+redis.call('ZADD', 'drivers:by-heartbeat', ARGV[5], ARGV[1])
+`;
+
+interface GeoIndexCommands {
+  flApplyPing(driverKey: string, driverId: string, cell: string, lat: number, lng: number, nowMs: number): unknown;
+}
+
 /**
  * Redis geo index over H3 res-8 cells: one hash per driver
  * (`driver:{id}` → cell,status,lat,lng,heartbeatMs), one SET of available
@@ -51,16 +83,21 @@ export function cellKey(cell: string): string {
  * never reads wall time, which is what makes staleness testable.
  */
 export class GeoIndex {
-  constructor(private readonly redis: Redis) {}
+  private readonly redis: Redis & GeoIndexCommands;
+
+  constructor(redis: Redis) {
+    redis.defineCommand('flApplyPing', { numberOfKeys: 1, lua: APPLY_PING_LUA });
+    this.redis = redis as Redis & GeoIndexCommands;
+  }
 
   /**
-   * Apply a batch of pings: hash + set + ZSET updates for the whole batch in
-   * ONE pipelined MULTI (batching is the point — one round trip per flush).
-   *
-   * A MULTI cannot branch on reads, so current cell/status are read in a
-   * pipeline first. The window between read and write can race a matcher
-   * claim; the atomic claim (phase C) re-verifies membership + status +
-   * heartbeat in Lua, so a spuriously re-added driver is caught at claim time.
+   * Apply a batch of pings: one pipelined flight of per-driver Lua scripts
+   * (batching is the point — one round trip per flush; atomicity per driver
+   * is the correctness — see APPLY_PING_LUA). A new/available/offline driver
+   * becomes available in its (possibly new) cell — SADD is idempotent, so
+   * re-adding also self-heals a lost set after a Redis wipe. A claimed or
+   * on_trip driver gets position + heartbeat only: status and set membership
+   * belong to the matcher from there, and the script can never resurrect it.
    */
   async applyPings(pings: readonly GeoPing[], nowMs: number): Promise<void> {
     if (pings.length === 0) return;
@@ -68,44 +105,13 @@ export class GeoIndex {
     // Newest ping per driver wins within a batch.
     const latest = new Map<string, GeoPing>();
     for (const ping of pings) latest.set(ping.driverId, ping);
-    const ids = [...latest.keys()];
 
-    const reads = this.redis.pipeline();
-    for (const id of ids) reads.hmget(driverKey(id), 'cell', 'status');
-    const prev = (await reads.exec()) ?? [];
-
-    const multi = this.redis.multi();
-    ids.forEach((id, i) => {
-      const ping = latest.get(id)!;
-      const row = (prev[i]?.[1] ?? [null, null]) as (string | null)[];
-      const prevCell = row[0] ?? null;
-      const prevStatus = row[1] ?? null;
+    const pipeline = this.redis.pipeline();
+    for (const [id, ping] of latest) {
       const cell = cellFor(ping.lat, ping.lng);
-
-      const ours = prevStatus === null || prevStatus === 'available' || prevStatus === 'offline';
-      if (ours) {
-        // New, available, or offline driver: a ping makes it available in its
-        // (possibly new) cell. SADD is idempotent, so always re-adding also
-        // self-heals a lost set after a Redis wipe.
-        if (prevStatus === 'available' && prevCell !== null && prevCell !== cell) {
-          multi.srem(cellKey(prevCell), id);
-        }
-        multi.sadd(cellKey(cell), id);
-        multi.hset(driverKey(id), {
-          cell,
-          status: 'available' satisfies DriverStatus,
-          lat: ping.lat,
-          lng: ping.lng,
-          heartbeatMs: nowMs,
-        });
-      } else {
-        // claimed/on_trip: position + heartbeat only. Status and set
-        // membership belong to the matcher from here — never re-add.
-        multi.hset(driverKey(id), { cell, lat: ping.lat, lng: ping.lng, heartbeatMs: nowMs });
-      }
-      multi.zadd(HEARTBEAT_ZSET, nowMs, id);
-    });
-    await multi.exec();
+      (pipeline as unknown as GeoIndexCommands).flApplyPing(driverKey(id), id, cell, ping.lat, ping.lng, nowMs);
+    }
+    await pipeline.exec();
   }
 
   /**
