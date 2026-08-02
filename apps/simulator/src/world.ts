@@ -31,6 +31,15 @@ export function toLatLng(city: City, p: Point): { lat: number; lng: number } {
   return { lat: city.originLat + p.y / M_PER_DEG_LAT, lng: city.originLng + p.x / mPerDegLng };
 }
 
+/** Inverse of toLatLng, clamped to the city (trip coordinates arrive from the wire). */
+export function fromLatLng(city: City, lat: number, lng: number): Point {
+  const mPerDegLng = M_PER_DEG_LAT * Math.cos((city.originLat * Math.PI) / 180);
+  return clampToCity(city, {
+    x: (lng - city.originLng) * mPerDegLng,
+    y: (lat - city.originLat) * M_PER_DEG_LAT,
+  });
+}
+
 /** A random street intersection on the city grid. */
 export function randomIntersection(city: City, rng: Rng): Point {
   const cols = Math.floor(city.widthM / city.blockM);

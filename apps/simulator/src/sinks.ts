@@ -1,11 +1,44 @@
 import WebSocket from 'ws';
-import type { SimMessage } from '@fleetline/core';
+import type { ServerMessage, SimMessage } from '@fleetline/core';
 
 export interface Sink {
   send(msg: SimMessage): void;
   close(): Promise<void>;
   readonly sent: number;
   readonly dropped: number;
+}
+
+/** Server → simulator messages (offers, trip assignments). Only the ws sink has an inbound side. */
+export type ServerMessageHandler = (msg: ServerMessage) => void;
+
+/** Shape-check an inbound server message — crashes are worse than drops. */
+function parseServerMessage(raw: unknown): ServerMessage | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const msg = raw as Record<string, unknown>;
+  const point = (v: unknown): v is { lat: number; lng: number } =>
+    typeof v === 'object' &&
+    v !== null &&
+    typeof (v as { lat: unknown }).lat === 'number' &&
+    typeof (v as { lng: unknown }).lng === 'number';
+  if (
+    msg['type'] === 'offer' &&
+    typeof msg['offerId'] === 'string' &&
+    typeof msg['driverId'] === 'string' &&
+    typeof msg['tripId'] === 'string' &&
+    point(msg['pickup'])
+  ) {
+    return msg as unknown as ServerMessage;
+  }
+  if (
+    msg['type'] === 'trip_assigned' &&
+    typeof msg['tripId'] === 'string' &&
+    typeof msg['driverId'] === 'string' &&
+    point(msg['pickup']) &&
+    point(msg['dest'])
+  ) {
+    return msg as unknown as ServerMessage;
+  }
+  return null;
 }
 
 export class NullSink implements Sink {
@@ -35,7 +68,7 @@ export class WsSink implements Sink {
   private pending: string[] = [];
   private static readonly MAX_PENDING = 10_000;
 
-  constructor(url: string) {
+  constructor(url: string, onMessage?: ServerMessageHandler) {
     this.ws = new WebSocket(url);
     this.ws.on('open', () => {
       this.opened = true;
@@ -48,6 +81,18 @@ export class WsSink implements Sink {
     this.ws.on('error', (err) => {
       process.stderr.write(`ws sink error: ${err.message}\n`);
     });
+    if (onMessage !== undefined) {
+      this.ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(String(data));
+        } catch {
+          return;
+        }
+        const msg = parseServerMessage(parsed);
+        if (msg !== null) onMessage(msg);
+      });
+    }
   }
 
   // ponytail: drop-on-backpressure with counters; batching/acks arrive with gateway ingestion.
@@ -76,10 +121,10 @@ export class WsSink implements Sink {
   }
 }
 
-export function createSink(kind: string, gatewayUrl: string): Sink {
+export function createSink(kind: string, gatewayUrl: string, onMessage?: ServerMessageHandler): Sink {
   switch (kind) {
     case 'ws':
-      return new WsSink(gatewayUrl);
+      return new WsSink(gatewayUrl, onMessage);
     case 'stdout':
       return new StdoutSink();
     case 'null':
