@@ -72,6 +72,33 @@ describe('migrations (testcontainers postgres)', () => {
     expect(count.rows[0]).toEqual({ n: 2 });
   });
 
+  it('offered/matching are valid pre-acceptance statuses NOT covered by the partial index', async () => {
+    await insertRequest('r1');
+    await insertRequest('r2');
+    await insertTrip('t1', 'r1', 'd1', 'offered');
+    // An offered (or reverted-to-matching) trip does not block the driver at
+    // the index level — exclusivity pre-acceptance is the Redis claim's job.
+    await insertTrip('t2', 'r2', 'd1', 'matching'); // does not throw
+  });
+
+  it('trip_events: outbox rows attach to trips, undispatched by default', async () => {
+    await insertRequest('r1');
+    await insertTrip('t1', 'r1', 'd1');
+    await pool.query(
+      `INSERT INTO trip_events (trip_id, type, payload) VALUES ('t1', 'matched', '{"event":"OFFER_ACCEPTED"}')`,
+    );
+    const rows = await pool.query(
+      `SELECT type, payload, dispatched_at FROM trip_events WHERE trip_id = 't1'`,
+    );
+    expect(rows.rows).toEqual([
+      { type: 'matched', payload: { event: 'OFFER_ACCEPTED' }, dispatched_at: null },
+    ]);
+    // No orphan events: trip must exist.
+    await expect(
+      pool.query(`INSERT INTO trip_events (trip_id, type) VALUES ('ghost', 'matched')`),
+    ).rejects.toMatchObject({ code: '23503' });
+  });
+
   it('one trip per request: request_id is unique and status values are checked', async () => {
     await insertRequest('r1');
     await insertTrip('t1', 'r1', 'd1');
