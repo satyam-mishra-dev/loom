@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/main.ts",
-    "test:integration": "vitest run matcher.integration"
+    "janitor": "tsx src/janitor-main.ts",
+    "test:integration": "vitest run matcher.integration cascade.integration"
   },
   "dependencies": {
     "@fleetline/core": "*",

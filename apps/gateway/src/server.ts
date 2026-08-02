@@ -4,7 +4,15 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { WebSocket, WebSocketServer } from 'ws';
-import { GeoIndex, REQUESTS_QUEUE, type GeoPing } from '@fleetline/core';
+import {
+  GeoIndex,
+  OFFER_REPLY_TTL_MS,
+  REQUESTS_QUEUE,
+  TRIP_EVENTS_QUEUE,
+  driverChannel,
+  offerReplyKey,
+  type GeoPing,
+} from '@fleetline/core';
 import { verifyToken } from './auth.js';
 import { createMetrics, renderMetrics, type GatewayMetrics } from './metrics.js';
 
@@ -56,26 +64,60 @@ export interface Gateway {
 
 type InboundMessage =
   | { kind: 'ping'; ping: GeoPing }
-  | { kind: 'ride_request'; requestId: string; lat: number; lng: number };
+  | {
+      kind: 'ride_request';
+      requestId: string;
+      lat: number;
+      lng: number;
+      destLat: number | null;
+      destLng: number | null;
+    }
+  | { kind: 'offer_reply'; offerId: string; driverId: string; accept: boolean }
+  | { kind: 'trip_progress'; tripId: string; driverId: string; event: 'arrived_pickup' | 'trip_done' };
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function nonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0;
+}
 
 /** Shape-check an incoming message. Trust boundary: never assume valid JSON shape. */
 function parseMessage(raw: unknown): InboundMessage | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const msg = raw as Record<string, unknown>;
-  const { lat, lng } = msg;
-  if (typeof lat !== 'number' || !Number.isFinite(lat)) return null;
-  if (typeof lng !== 'number' || !Number.isFinite(lng)) return null;
-  if (msg['type'] === 'driver_ping') {
-    const driverId = msg['driverId'];
-    if (typeof driverId !== 'string' || driverId.length === 0) return null;
-    return { kind: 'ping', ping: { driverId, lat, lng } };
+  switch (msg['type']) {
+    case 'driver_ping': {
+      const driverId = msg['driverId'];
+      const { lat, lng } = msg;
+      if (!nonEmptyString(driverId) || !isFiniteNumber(lat) || !isFiniteNumber(lng)) return null;
+      return { kind: 'ping', ping: { driverId, lat, lng } };
+    }
+    case 'ride_request': {
+      const requestId = msg['requestId'];
+      const { lat, lng } = msg;
+      if (!nonEmptyString(requestId) || !isFiniteNumber(lat) || !isFiniteNumber(lng)) return null;
+      // Destination is optional on the wire; a missing one degenerates to a
+      // zero-length trip rather than rejecting the request.
+      const destLat = isFiniteNumber(msg['destLat']) ? msg['destLat'] : null;
+      const destLng = isFiniteNumber(msg['destLng']) ? msg['destLng'] : null;
+      return { kind: 'ride_request', requestId, lat, lng, destLat, destLng };
+    }
+    case 'offer_reply': {
+      const { offerId, driverId, accept } = msg;
+      if (!nonEmptyString(offerId) || !nonEmptyString(driverId) || typeof accept !== 'boolean') return null;
+      return { kind: 'offer_reply', offerId, driverId, accept };
+    }
+    case 'trip_progress': {
+      const { tripId, driverId, event } = msg;
+      if (!nonEmptyString(tripId) || !nonEmptyString(driverId)) return null;
+      if (event !== 'arrived_pickup' && event !== 'trip_done') return null;
+      return { kind: 'trip_progress', tripId, driverId, event };
+    }
+    default:
+      return null;
   }
-  if (msg['type'] === 'ride_request') {
-    const requestId = msg['requestId'];
-    if (typeof requestId !== 'string' || requestId.length === 0) return null;
-    return { kind: 'ride_request', requestId, lat, lng };
-  }
-  return null;
 }
 
 /**
@@ -151,19 +193,55 @@ export function buildGateway(opts: GatewayOptions): Gateway {
   // poppable. A duplicate WS delivery re-pushes the id but ON CONFLICT keeps
   // one row, and the matcher's pending→matching row guard makes the second
   // pop a no-op: at-least-once intake, exactly-once matching.
-  async function intakeRequest(requestId: string, lat: number, lng: number): Promise<void> {
+  async function intakeRequest(
+    requestId: string,
+    lat: number,
+    lng: number,
+    destLat: number | null,
+    destLng: number | null,
+  ): Promise<void> {
     if (pool === undefined) return; // drivers-only gateway: counted, not consumed
     try {
       await pool.query(
-        `INSERT INTO ride_requests (id, lat, lng, status) VALUES ($1, $2, $3, 'pending')
+        `INSERT INTO ride_requests (id, lat, lng, dest_lat, dest_lng, status)
+         VALUES ($1, $2, $3, $4, $5, 'pending')
          ON CONFLICT (id) DO NOTHING`,
-        [requestId, lat, lng],
+        [requestId, lat, lng, destLat, destLng],
       );
       await redis.lpush(REQUESTS_QUEUE, requestId);
       metrics.rideRequestsEnqueuedTotal++;
     } catch (err) {
       metrics.rideRequestErrorsTotal++;
       app.log.error({ err, requestId }, 'ride request intake failed');
+    }
+  }
+
+  // ---- driver replies + trip progress: WS in, Redis lists out ----
+  // The reply list buffers the race where the driver answers before the
+  // matcher blocks; PEXPIRE GCs replies nobody ever collects (offer already
+  // timed out). Trip progress rides the same LPUSH/BLMOVE pattern as request
+  // intake. See @fleetline/core messages.ts for the full transport rationale.
+  async function forwardOfferReply(offerId: string, accept: boolean): Promise<void> {
+    try {
+      await redis
+        .multi()
+        .lpush(offerReplyKey(offerId), JSON.stringify({ accept }))
+        .pexpire(offerReplyKey(offerId), OFFER_REPLY_TTL_MS)
+        .exec();
+      metrics.offerRepliesTotal++;
+    } catch (err) {
+      metrics.replyErrorsTotal++;
+      app.log.error({ err, offerId }, 'offer reply forward failed');
+    }
+  }
+
+  async function forwardTripProgress(tripId: string, driverId: string, event: string): Promise<void> {
+    try {
+      await redis.lpush(TRIP_EVENTS_QUEUE, JSON.stringify({ tripId, driverId, event }));
+      metrics.tripProgressTotal++;
+    } catch (err) {
+      metrics.replyErrorsTotal++;
+      app.log.error({ err, tripId, driverId }, 'trip progress forward failed');
     }
   }
 
@@ -191,6 +269,49 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     return socket !== undefined ? sendOn(socket, data) : false;
   }
 
+  // ---- matcher → driver fan-out (offer transport, downstream half) ----
+  // Each gateway SUBSCRIBEs to `driver:{id}:msg` for exactly its connected
+  // drivers — subscribe when a driver binds to a socket (token principal at
+  // auth, plus ids learned from pings on a multiplexed socket), unsubscribe
+  // when the socket closes. A matcher publishing an offer therefore reaches
+  // the one gateway that can deliver it, with no routing table anywhere.
+  // Delivery reuses the bounded sendToDriver; a miss (driver gone, queue
+  // full) is dropped — the matcher's offer timeout is the recovery path.
+  const sub = redis.duplicate();
+  sub.on('message', (channel: string, message: string) => {
+    const driverId = channel.slice('driver:'.length, -':msg'.length);
+    if (sendToDriver(driverId, message)) metrics.messagesForwardedTotal++;
+    else metrics.forwardDropsTotal++;
+  });
+
+  // ioredis gotcha: duplicate() starts in 'wait', and a SUBSCRIBE issued
+  // while the lazy connect is mid-handshake gets written BEFORE the ready
+  // check's INFO, which then fails ("subscriber mode") and poisons the
+  // connection. So: connect eagerly, and serialize every (un)subscribe
+  // behind 'ready' — the chain also keeps bind/unbind ordering per driver.
+  if (sub.status === 'wait') {
+    sub.connect().catch((err: unknown) => app.log.error({ err }, 'subscriber connect failed'));
+  }
+  let subOps: Promise<unknown> = new Promise<void>((resolve) => {
+    if ((sub.status as string) === 'ready') resolve();
+    else sub.once('ready', resolve);
+  });
+  function queueSubOp(op: () => Promise<unknown>, driverId: string): void {
+    subOps = subOps.then(op).catch((err: unknown) => {
+      app.log.error({ err, driverId }, 'driver channel (un)subscribe failed');
+    });
+  }
+
+  function bindDriver(driverId: string, socket: WebSocket): void {
+    driverSockets.set(driverId, socket);
+    queueSubOp(() => sub.subscribe(driverChannel(driverId)), driverId);
+  }
+
+  function unbindDriver(driverId: string): void {
+    driverSockets.delete(driverId);
+    queueSubOp(() => sub.unsubscribe(driverChannel(driverId)), driverId);
+  }
+
   const wss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', (socket, req: IncomingMessage) => {
@@ -206,7 +327,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     metrics.wsConnectionsActive++;
 
     const boundIds = new Set<string>([principal]);
-    driverSockets.set(principal, socket);
+    bindDriver(principal, socket);
 
     // Transport liveness (notes §8): server pings every pingIntervalMs; no
     // pong within pongTimeoutMs ⇒ half-open TCP (NAT/mobile), terminate.
@@ -247,13 +368,21 @@ export function buildGateway(opts: GatewayOptions): Gateway {
       }
       if (msg.kind === 'ride_request') {
         metrics.rideRequestsReceivedTotal++;
-        void intakeRequest(msg.requestId, msg.lat, msg.lng);
+        void intakeRequest(msg.requestId, msg.lat, msg.lng, msg.destLat, msg.destLng);
+        return;
+      }
+      if (msg.kind === 'offer_reply') {
+        void forwardOfferReply(msg.offerId, msg.accept);
+        return;
+      }
+      if (msg.kind === 'trip_progress') {
+        void forwardTripProgress(msg.tripId, msg.driverId, msg.event);
         return;
       }
       metrics.pingsReceivedTotal++;
       if (!boundIds.has(msg.ping.driverId)) {
         boundIds.add(msg.ping.driverId);
-        driverSockets.set(msg.ping.driverId, socket);
+        bindDriver(msg.ping.driverId, socket);
       }
       enqueue(msg.ping);
     });
@@ -263,7 +392,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
       clearInterval(pinger);
       if (pongTimer !== null) clearTimeout(pongTimer);
       for (const id of boundIds) {
-        if (driverSockets.get(id) === socket) driverSockets.delete(id);
+        if (driverSockets.get(id) === socket) unbindDriver(id);
       }
     });
   });
@@ -293,6 +422,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     for (const client of wss.clients) client.terminate();
     await flush(); // drain buffered pings
     await inFlight;
+    sub.disconnect();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
 

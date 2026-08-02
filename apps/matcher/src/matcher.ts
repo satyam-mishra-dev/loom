@@ -1,17 +1,25 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import pg from 'pg';
+import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import {
   ClaimStore,
   DEFAULT_CLAIM_TTL_MS,
+  DEFAULT_OFFER_TTL_MS,
   DEFAULT_STALE_MS,
   GeoIndex,
   REQUESTS_PROCESSING,
   REQUESTS_QUEUE,
+  TRIP_EVENTS_PROCESSING,
+  TRIP_EVENTS_QUEUE,
+  driverChannel,
+  offerReplyKey,
   rankCandidates,
+  type OfferMessage,
+  type TripAssigned,
 } from '@fleetline/core';
 import { createMetrics, type MatcherMetrics } from './metrics.js';
+import { TripStore } from './trip-store.js';
 
 export interface MatcherOptions {
   redis: Redis;
@@ -23,31 +31,41 @@ export interface MatcherOptions {
   maxK?: number;
   /** Heartbeat freshness required to claim (default 10s, same as the sweep). */
   freshMs?: number;
-  /** Claim lease duration (default 8s — phase D's offer TTL). */
+  /** Claim lease duration (default 12s — MUST exceed offerTtlMs, see claim.ts). */
   claimTtlMs?: number;
+  /** Offer TTL: how long a driver gets to answer (default 8s). */
+  offerTtlMs?: number;
+  /** Cascade cap: offers per request before an honest unmatched (default 5). */
+  maxOffers?: number;
   /** Injectable clock (tests). */
   now?: () => number;
 }
 
 export type MatchOutcome = 'matched' | 'unmatched' | 'skipped';
 
+/** Requests stuck 'pending' longer than this are re-enqueued at startup (lost-LPUSH net). */
+const REQUEUE_PENDING_MS = 30_000;
+
 /**
  * The matching pipeline: request → candidates → score → ATOMIC CLAIM →
- * trip row → confirm. One instance = one consumer group; the signature test
- * runs two instances against the same stores to prove cross-instance safety.
+ * OFFER (pub/sub out, reply list back) → accept: trip matched → en_route;
+ * decline/timeout: release, next candidate — max 5 offers, then an honest
+ * unmatched. One instance = one consumer group; the signature test runs two
+ * instances against the same stores to prove cross-instance safety.
  *
- * Write order per candidate is claim → Postgres trip INSERT → confirm. The
- * confirm comes after the commit so that EVERY Postgres failure — including
- * the never-happens partial-unique-index rejection — unwinds through the same
- * atomic releaseClaim while the claim still exists. (Confirming first would
- * delete the claim and leave the violation path nothing to release with.)
- * Phase D slots the offer/accept between the claim and this same
- * commit+confirm tail: the claim already carries {tripId, token, expiresAt}.
+ * Write order per accepted offer is trip commit → confirmClaim, so that
+ * EVERY Postgres failure — including the never-happens partial-unique-index
+ * rejection — unwinds through the same atomic releaseClaim while the claim
+ * still exists. On decline/timeout the order is trip revert (PG) →
+ * releaseClaim (Redis): a crash between the two leaves a live claim that the
+ * janitor can still see, release, and re-enqueue from — the other order
+ * would leave an orphaned OFFERED row no sweep could find.
  */
 export class MatcherCore {
   readonly metrics: MatcherMetrics = createMetrics();
   readonly geoIndex: GeoIndex;
   readonly claims: ClaimStore;
+  readonly trips: TripStore;
 
   private readonly redis: Redis;
   private readonly pool: pg.Pool;
@@ -56,6 +74,8 @@ export class MatcherCore {
   private readonly maxK: number;
   private readonly freshMs: number;
   private readonly claimTtlMs: number;
+  private readonly offerTtlMs: number;
+  private readonly maxOffers: number;
   private readonly now: () => number;
 
   private stopped = false;
@@ -70,21 +90,36 @@ export class MatcherCore {
     this.maxK = opts.maxK ?? 3;
     this.freshMs = opts.freshMs ?? DEFAULT_STALE_MS;
     this.claimTtlMs = opts.claimTtlMs ?? DEFAULT_CLAIM_TTL_MS;
+    this.offerTtlMs = opts.offerTtlMs ?? DEFAULT_OFFER_TTL_MS;
+    this.maxOffers = opts.maxOffers ?? 5;
     this.now = opts.now ?? Date.now;
+    if (this.claimTtlMs <= this.offerTtlMs) {
+      throw new Error(
+        `claimTtlMs (${this.claimTtlMs}) must exceed offerTtlMs (${this.offerTtlMs}) — see claim.ts`,
+      );
+    }
     this.geoIndex = new GeoIndex(this.redis);
     this.claims = new ClaimStore(this.redis);
+    this.trips = new TripStore(this.pool);
   }
 
   /**
-   * Match one request end to end. Safe under at-least-once delivery: the
-   * pending→matching UPDATE is the idempotency guard — whoever wins that row
-   * owns the request, every other delivery is a counted no-op.
+   * Match one request end to end (the full cascade). Safe under
+   * at-least-once delivery: the pending→matching UPDATE is the idempotency
+   * guard — whoever wins that row owns the request, every other delivery is
+   * a counted no-op. A janitor-re-enqueued request re-enters here with its
+   * trip row parked at 'matching' and resumes cascading on the same trip.
    */
   async matchRequest(requestId: string): Promise<MatchOutcome> {
     const started = performance.now();
-    const claimed = await this.pool.query<{ lat: number; lng: number }>(
+    const claimed = await this.pool.query<{
+      lat: number;
+      lng: number;
+      dest_lat: number | null;
+      dest_lng: number | null;
+    }>(
       `UPDATE ride_requests SET status = 'matching' WHERE id = $1 AND status = 'pending'
-       RETURNING lat, lng`,
+       RETURNING lat, lng, dest_lat, dest_lng`,
       [requestId],
     );
     const row = claimed.rows[0];
@@ -93,109 +128,150 @@ export class MatcherCore {
       this.log.warn({ requestId }, 'request not pending — duplicate delivery or lost row, skipping');
       return 'skipped';
     }
+    const rider = { lat: row.lat, lng: row.lng };
+    const dest = { lat: row.dest_lat ?? row.lat, lng: row.dest_lng ?? row.lng };
 
-    const { candidates } = await this.geoIndex.findCandidates(row.lat, row.lng, {
+    // Resume support: a pre-crash cascade may already own a trip row.
+    const existing = await this.pool.query<{ id: string }>('SELECT id FROM trips WHERE request_id = $1', [
+      requestId,
+    ]);
+    const tripId = existing.rows[0]?.id ?? randomUUID();
+
+    const { candidates } = await this.geoIndex.findCandidates(rider.lat, rider.lng, {
       need: this.need,
       maxK: this.maxK,
       nowMs: this.now(),
       staleMs: this.freshMs,
     });
 
-    for (const candidate of rankCandidates(row.lat, row.lng, candidates)) {
-      const tripId = randomUUID();
-      const token = await this.claims.claimDriver(
-        candidate.driverId,
-        tripId,
-        this.now(),
-        this.freshMs,
-        this.claimTtlMs,
-      );
-      if (token === null) {
-        this.metrics.claimConflictsTotal++;
-        continue;
-      }
+    // One connection for this call's offer replies: BLPOP blocks its socket,
+    // so the shared client can never be the one waiting.
+    let replyConn: Redis | null = null;
+    let offers = 0;
+    try {
+      for (const candidate of rankCandidates(rider.lat, rider.lng, candidates)) {
+        if (offers >= this.maxOffers) break;
+        const driverId = candidate.driverId;
+        const token = await this.claims.claimDriver(driverId, tripId, this.now(), this.freshMs, this.claimTtlMs);
+        if (token === null) {
+          this.metrics.claimConflictsTotal++;
+          continue;
+        }
 
-      let committed: boolean;
-      try {
-        committed = await this.insertTrip(tripId, requestId, candidate.driverId, row, token);
-      } catch (err) {
-        await this.claims.releaseClaim(candidate.driverId, token);
-        throw err;
-      }
-      if (!committed) {
-        await this.claims.releaseClaim(candidate.driverId, token);
-        continue;
-      }
+        const offerId = randomUUID();
+        let offered: boolean;
+        try {
+          offered = await this.trips.offerTrip({ tripId, requestId, driverId, offerId, claimToken: token, rider });
+        } catch (err) {
+          await this.claims.releaseClaim(driverId, token);
+          throw err;
+        }
+        if (!offered) {
+          // The trip row is not ours to offer anymore — a janitor or peer
+          // took the request over. Back away entirely.
+          await this.claims.releaseClaim(driverId, token);
+          this.metrics.cascadeLostTotal++;
+          this.log.warn({ requestId, tripId, driverId }, 'lost trip ownership mid-cascade');
+          return 'skipped';
+        }
 
-      if (!(await this.claims.confirmClaim(candidate.driverId, token, this.now()))) {
-        // Claim expired between claim and commit (PG write took > ttl). The
-        // trip stands; the driver's stale claim is phase D janitor territory.
-        this.metrics.confirmFailuresTotal++;
-        this.log.error({ requestId, tripId, driverId: candidate.driverId }, 'confirm failed after commit');
+        offers++;
+        this.metrics.offersSentTotal++;
+        const offer: OfferMessage = {
+          type: 'offer',
+          offerId,
+          tripId,
+          driverId,
+          pickup: rider,
+          expiresAt: this.now() + this.offerTtlMs,
+        };
+        await this.redis.publish(driverChannel(driverId), JSON.stringify(offer));
+
+        replyConn ??= this.redis.duplicate();
+        const verdict = await this.awaitReply(replyConn, offerId);
+
+        if (verdict === true) {
+          const accepted = await this.trips.acceptOffer({ tripId, offerId, requestId });
+          if (accepted === 'conflict') {
+            // Redis let a double-claim through — the partial unique index
+            // just saved the invariant. Counted, loud, cascade continues.
+            this.metrics.pgUniqueViolationsTotal++;
+            this.log.error({ tripId, requestId, driverId }, 'PARTIAL UNIQUE INDEX VIOLATION');
+            await this.claims.releaseClaim(driverId, token);
+            continue;
+          }
+          if (accepted === 'lost') {
+            await this.claims.releaseClaim(driverId, token);
+            this.metrics.cascadeLostTotal++;
+            return 'skipped';
+          }
+          this.metrics.offerAcceptsTotal++;
+          if (!(await this.claims.confirmClaim(driverId, token, this.now()))) {
+            // Claim expired between offer and accept (should be unreachable:
+            // claim TTL > offer TTL + margin). The trip stands; PG's index
+            // keeps the driver single-booked even if the janitor frees it.
+            this.metrics.confirmFailuresTotal++;
+            this.log.error({ requestId, tripId, driverId }, 'confirm failed after accept');
+          }
+          // en_route commits BEFORE trip_assigned goes out: a fast driver's
+          // arrived_pickup must never race the matched→en_route write.
+          if (!(await this.trips.startEnRoute(tripId))) {
+            this.log.error({ tripId }, 'matched trip refused en_route transition');
+          }
+          const assigned: TripAssigned = { type: 'trip_assigned', tripId, driverId, pickup: rider, dest };
+          await this.redis.publish(driverChannel(driverId), JSON.stringify(assigned));
+          this.metrics.matchesTotal++;
+          this.metrics.matchLatencyMs.observe(performance.now() - started);
+          this.log.info({ requestId, tripId, driverId, offers }, 'matched');
+          return 'matched';
+        }
+
+        // Decline or timeout. PG revert FIRST, then the claim release (see
+        // class header for the crash-ordering argument).
+        if (verdict === null) this.metrics.offerTimeoutsTotal++;
+        else this.metrics.offerDeclinesTotal++;
+        const reverted = await this.trips.revertOffer(
+          tripId,
+          offerId,
+          verdict === null ? 'OFFER_TIMED_OUT' : 'OFFER_DECLINED',
+        );
+        await this.claims.releaseClaim(driverId, token);
+        if (!reverted) {
+          this.metrics.cascadeLostTotal++;
+          return 'skipped';
+        }
       }
-      this.metrics.matchesTotal++;
-      this.metrics.matchLatencyMs.observe(performance.now() - started);
-      this.log.info({ requestId, tripId, driverId: candidate.driverId }, 'matched');
-      return 'matched';
+    } finally {
+      replyConn?.disconnect();
     }
 
-    // Honest failure: no claimable candidate after the full walk.
-    await this.pool.query(`UPDATE ride_requests SET status = 'unmatched' WHERE id = $1`, [requestId]);
+    // Honest failure: no claimable candidate, or the cascade cap. The trip
+    // row (if any offers happened) parks at cancelled in the same TX.
+    if (!(await this.trips.finishUnmatched(tripId, requestId))) {
+      this.metrics.cascadeLostTotal++;
+      return 'skipped';
+    }
     this.metrics.unmatchedTotal++;
     this.metrics.matchLatencyMs.observe(performance.now() - started);
-    this.log.info({ requestId, candidates: candidates.length }, 'unmatched');
+    this.log.info({ requestId, offers, candidates: candidates.length }, 'unmatched');
     return 'unmatched';
   }
 
-  /**
-   * Trip row + request update in ONE transaction. Returns false (rolled back,
-   * counted) on a unique violation; throws on anything else.
-   */
-  private async insertTrip(
-    tripId: string,
-    requestId: string,
-    driverId: string,
-    rider: { lat: number; lng: number },
-    claimToken: string,
-  ): Promise<boolean> {
-    const client = await this.pool.connect();
+  /** BLPOP the offer's reply list: true = accept, false = decline, null = timeout. */
+  private async awaitReply(conn: Redis, offerId: string): Promise<boolean | null> {
+    const res = await conn.blpop(offerReplyKey(offerId), this.offerTtlMs / 1000);
+    if (res === null) return null;
     try {
-      await client.query('BEGIN');
-      await client.query(
-        `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token)
-         VALUES ($1, $2, $3, $4, $5, 'matched', $6)`,
-        [tripId, requestId, driverId, rider.lat, rider.lng, claimToken],
-      );
-      await client.query(
-        `UPDATE ride_requests SET status = 'matched', matched_trip_id = $2 WHERE id = $1`,
-        [requestId, tripId],
-      );
-      await client.query('COMMIT');
-      return true;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      if (err instanceof pg.DatabaseError && err.code === '23505') {
-        if (err.constraint === 'trips_one_active_per_driver') {
-          // Redis let a double-claim through — the index just saved the
-          // invariant. Must never happen; if it does, it is counted, loud,
-          // and the walk continues with the next candidate.
-          this.metrics.pgUniqueViolationsTotal++;
-          this.log.error({ tripId, requestId, driverId }, 'PARTIAL UNIQUE INDEX VIOLATION');
-        } else {
-          this.log.error({ err, tripId, requestId, driverId }, 'unexpected unique violation');
-        }
-        return false;
-      }
-      throw err;
-    } finally {
-      client.release();
+      const parsed = JSON.parse(res[1]) as { accept?: unknown };
+      return parsed.accept === true;
+    } catch {
+      return false;
     }
   }
 
   /**
-   * Start the intake consumers: N loops, each BLMOVE-ing ids from
-   * requests:queue into requests:processing on its own connection (blocking
-   * commands monopolize a socket).
+   * Start the consumers: N request loops + 1 trip-progress loop, each
+   * BLMOVE-ing on its own connection (blocking commands monopolize a socket).
    */
   async start(consumers: number): Promise<void> {
     this.stopped = false;
@@ -205,6 +281,9 @@ export class MatcherCore {
       this.conns.push(conn);
       this.loops.push(this.consumeLoop(conn, i));
     }
+    const tripConn = this.redis.duplicate();
+    this.conns.push(tripConn);
+    this.loops.push(this.tripEventLoop(tripConn));
   }
 
   /** Stops within ~1s (the BLMOVE timeout). In-flight matches finish first. */
@@ -217,20 +296,33 @@ export class MatcherCore {
   }
 
   /**
-   * Startup reaper for stuck processing entries: drain requests:processing
-   * back onto the queue. ponytail: one shared processing list drained on ANY
-   * instance start — a starting instance re-queues a peer's in-flight ids,
-   * which the row guard then turns into counted skips (at-least-once, safe,
+   * Startup reaper: drain both processing lists back onto their queues, and
+   * re-enqueue requests stuck 'pending' past a grace (covers a crash between
+   * a row INSERT/janitor revert and its LPUSH — a duplicate LPUSH is safe,
+   * the row guard collapses it). ponytail: shared processing lists drained on
+   * ANY instance start — a starting instance re-queues a peer's in-flight
+   * ids, which the guards turn into counted skips (at-least-once, safe,
    * occasionally wasteful). The upgrade path is asynq's lease pattern:
-   * per-consumer processing lists with heartbeats swept by the phase-D
-   * janitor.
+   * per-consumer processing lists with heartbeats swept by the janitor.
    */
   async recoverProcessing(): Promise<number> {
     let recovered = 0;
     while ((await this.redis.lmove(REQUESTS_PROCESSING, REQUESTS_QUEUE, 'LEFT', 'RIGHT')) !== null) {
       recovered++;
     }
-    if (recovered > 0) this.log.warn({ recovered }, 'requeued stuck processing entries');
+    while ((await this.redis.lmove(TRIP_EVENTS_PROCESSING, TRIP_EVENTS_QUEUE, 'LEFT', 'RIGHT')) !== null) {
+      recovered++;
+    }
+    const stale = await this.pool.query<{ id: string }>(
+      `SELECT id FROM ride_requests WHERE status = 'pending'
+       AND created_at < now() - ($1::int * interval '1 millisecond')`,
+      [REQUEUE_PENDING_MS],
+    );
+    for (const { id } of stale.rows) {
+      await this.redis.lpush(REQUESTS_QUEUE, id);
+      recovered++;
+    }
+    if (recovered > 0) this.log.warn({ recovered }, 'requeued stuck entries');
     return recovered;
   }
 
@@ -255,6 +347,63 @@ export class MatcherCore {
         this.metrics.matchErrorsTotal++;
         this.log.error({ err, requestId, consumer }, 'match failed; left in processing');
       }
+    }
+  }
+
+  /** Consume driver trip_progress: en_route → in_trip → completed, then free the driver. */
+  private async tripEventLoop(conn: Redis): Promise<void> {
+    while (!this.stopped) {
+      let raw: string | null;
+      try {
+        raw = await conn.blmove(TRIP_EVENTS_QUEUE, TRIP_EVENTS_PROCESSING, 'RIGHT', 'LEFT', 1);
+      } catch (err) {
+        if (this.stopped) return;
+        this.log.error({ err }, 'trip event pop failed');
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      if (raw === null) continue;
+
+      try {
+        await this.handleTripProgress(raw);
+        await this.redis.lrem(TRIP_EVENTS_PROCESSING, 1, raw);
+      } catch (err) {
+        this.metrics.matchErrorsTotal++;
+        this.log.error({ err, raw }, 'trip event failed; left in processing');
+      }
+    }
+  }
+
+  private async handleTripProgress(raw: string): Promise<void> {
+    let msg: { tripId?: unknown; driverId?: unknown; event?: unknown };
+    try {
+      msg = JSON.parse(raw) as typeof msg;
+    } catch {
+      this.metrics.tripEventGuardFailuresTotal++;
+      return;
+    }
+    const { tripId, driverId, event } = msg;
+    if (
+      typeof tripId !== 'string' ||
+      typeof driverId !== 'string' ||
+      (event !== 'arrived_pickup' && event !== 'trip_done')
+    ) {
+      this.metrics.tripEventGuardFailuresTotal++;
+      return;
+    }
+    if (!(await this.trips.progress(tripId, driverId, event))) {
+      this.metrics.tripEventGuardFailuresTotal++;
+      this.log.warn({ tripId, driverId, event }, 'trip progress refused by machine guard');
+      return;
+    }
+    if (event === 'trip_done') {
+      // Trip row is final; hand the driver back to the index. A crash between
+      // the commit above and this call leaves the driver 'on_trip' with no
+      // active trip — ponytail: no repair sweep for that sliver; add an
+      // on_trip-without-active-trip reconciler if it ever shows up in metrics.
+      await this.claims.freeDriver(driverId);
+      this.metrics.tripsCompletedTotal++;
+      this.log.info({ tripId, driverId }, 'trip completed, driver freed');
     }
   }
 }

@@ -15,6 +15,13 @@ export interface GatewayMetrics {
   batchesFlushedTotal: number;
   flushErrorsTotal: number;
   driversSweptTotal: number;
+  /** Pub/sub messages relayed to a connected driver's socket. */
+  messagesForwardedTotal: number;
+  /** Pub/sub messages for a driver this gateway could not deliver to. */
+  forwardDropsTotal: number;
+  offerRepliesTotal: number;
+  tripProgressTotal: number;
+  replyErrorsTotal: number;
   batchSize: Hist;
   flushLatencyMs: Hist;
 }
@@ -35,6 +42,11 @@ export function createMetrics(): GatewayMetrics {
     batchesFlushedTotal: 0,
     flushErrorsTotal: 0,
     driversSweptTotal: 0,
+    messagesForwardedTotal: 0,
+    forwardDropsTotal: 0,
+    offerRepliesTotal: 0,
+    tripProgressTotal: 0,
+    replyErrorsTotal: 0,
     batchSize: new Hist(),
     flushLatencyMs: new Hist(),
   };
@@ -56,6 +68,11 @@ export function renderMetrics(m: GatewayMetrics): string {
     ...renderCounter('ping_batches_flushed_total', m.batchesFlushedTotal),
     ...renderCounter('ping_flush_errors_total', m.flushErrorsTotal),
     ...renderCounter('drivers_swept_total', m.driversSweptTotal),
+    ...renderCounter('messages_forwarded_total', m.messagesForwardedTotal),
+    ...renderCounter('forward_drops_total', m.forwardDropsTotal),
+    ...renderCounter('offer_replies_total', m.offerRepliesTotal),
+    ...renderCounter('trip_progress_total', m.tripProgressTotal),
+    ...renderCounter('reply_errors_total', m.replyErrorsTotal),
     ...renderSummary('ping_batch_size', m.batchSize),
     ...renderSummary('ping_flush_latency_ms', m.flushLatencyMs),
     '',
