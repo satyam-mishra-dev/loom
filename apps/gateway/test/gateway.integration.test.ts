@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 import {
   HEARTBEAT_ZSET,
   REQUESTS_QUEUE,
+  SurgeStore,
   TRIP_EVENTS_QUEUE,
   cellKey,
   cellFor,
@@ -329,6 +330,53 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       await waitFor(() => gw.metrics.rideRequestsEnqueuedTotal === 1);
       expect(gw.metrics.invalidMessagesTotal).toBe(2);
       expect(await redis.lrange(REQUESTS_QUEUE, 0, -1)).toEqual(['ok']);
+    });
+
+    it('records surge demand per cell for each admitted request', async () => {
+      const { gw, port } = await startGateway({ pool });
+      const ws = await connect(port, signToken('rider', SECRET));
+      request(ws, 'r1');
+      request(ws, 'r2');
+
+      await waitFor(() => gw.metrics.rideRequestsEnqueuedTotal === 2);
+      const cell = cellFor(CENTER.lat, CENTER.lng);
+      // Demand feeds the sliding window under the request's cell (public API).
+      await waitFor(async () => {
+        const surges = await new SurgeStore(redis).recompute(Date.now());
+        return surges.find((s) => s.cell === cell)?.demand === 2;
+      });
+    });
+
+    it('rate limits intake per source: over-limit requests are rejected (429-equivalent), not dropped', async () => {
+      // Tight limit so the burst boundary is visible: 5 instantly, rest rejected.
+      const { gw, port } = await startGateway({
+        pool,
+        rateLimit: { limit: 5, windowMs: 60_000, burst: 5 },
+      });
+      const ws = await connect(port, signToken('rider', SECRET));
+      const rejected: string[] = [];
+      ws.on('message', (data: Buffer) => {
+        const m = JSON.parse(String(data)) as { type?: string; requestId?: string; reason?: string };
+        if (m.type === 'ride_rejected' && m.requestId !== undefined) rejected.push(m.requestId);
+      });
+
+      for (let i = 0; i < 20; i++) request(ws, `q${i}`);
+
+      await waitFor(() => gw.metrics.rideRequestsReceivedTotal === 20);
+      await waitFor(
+        () => gw.metrics.rideRequestsEnqueuedTotal + gw.metrics.rideRequestsRateLimitedTotal === 20,
+      );
+
+      // The burst of 5 admitted, the other 15 rejected + counted (never dropped).
+      expect(gw.metrics.rideRequestsEnqueuedTotal).toBe(5);
+      expect(gw.metrics.rideRequestsRateLimitedTotal).toBe(15);
+      expect(gw.limiter.metrics.deniedTotal).toBe(15);
+      expect(gw.limiter.metrics.primaryTotal).toBe(20); // healthy Redis: no fallback
+      await waitFor(() => rejected.length === 15);
+
+      // Only the admitted requests reached Postgres.
+      const rows = await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM ride_requests');
+      expect(rows.rows[0]?.n).toBe(5);
     });
   });
 

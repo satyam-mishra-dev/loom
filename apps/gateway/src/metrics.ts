@@ -1,4 +1,4 @@
-import { Hist, renderCounter, renderSummary } from '@fleetline/core';
+import { Hist, renderCounter, renderSummary, type LimiterMetrics } from '@fleetline/core';
 
 export interface GatewayMetrics {
   wsConnectionsTotal: number;
@@ -7,6 +7,8 @@ export interface GatewayMetrics {
   pingsReceivedTotal: number;
   rideRequestsReceivedTotal: number;
   rideRequestsEnqueuedTotal: number;
+  /** Ride requests rejected by the intake rate limiter (429-equivalent). */
+  rideRequestsRateLimitedTotal: number;
   rideRequestErrorsTotal: number;
   invalidMessagesTotal: number;
   authRejectsTotal: number;
@@ -34,6 +36,7 @@ export function createMetrics(): GatewayMetrics {
     pingsReceivedTotal: 0,
     rideRequestsReceivedTotal: 0,
     rideRequestsEnqueuedTotal: 0,
+    rideRequestsRateLimitedTotal: 0,
     rideRequestErrorsTotal: 0,
     invalidMessagesTotal: 0,
     authRejectsTotal: 0,
@@ -52,14 +55,15 @@ export function createMetrics(): GatewayMetrics {
   };
 }
 
-export function renderMetrics(m: GatewayMetrics): string {
-  return [
+export function renderMetrics(m: GatewayMetrics, limiter?: LimiterMetrics): string {
+  const lines = [
     ...renderCounter('ws_connections_total', m.wsConnectionsTotal),
     ...renderCounter('ws_connections_active', m.wsConnectionsActive, 'gauge'),
     ...renderCounter('ws_messages_received_total', m.wsMessagesReceivedTotal),
     ...renderCounter('pings_received_total', m.pingsReceivedTotal),
     ...renderCounter('ride_requests_received_total', m.rideRequestsReceivedTotal),
     ...renderCounter('ride_requests_enqueued_total', m.rideRequestsEnqueuedTotal),
+    ...renderCounter('ride_requests_rate_limited_total', m.rideRequestsRateLimitedTotal),
     ...renderCounter('ride_request_errors_total', m.rideRequestErrorsTotal),
     ...renderCounter('invalid_messages_total', m.invalidMessagesTotal),
     ...renderCounter('auth_rejects_total', m.authRejectsTotal),
@@ -75,6 +79,17 @@ export function renderMetrics(m: GatewayMetrics): string {
     ...renderCounter('reply_errors_total', m.replyErrorsTotal),
     ...renderSummary('ping_batch_size', m.batchSize),
     ...renderSummary('ping_flush_latency_ms', m.flushLatencyMs),
-    '',
-  ].join('\n');
+  ];
+  if (limiter !== undefined) {
+    lines.push(
+      ...renderCounter('intake_limiter_primary_total', limiter.primaryTotal),
+      ...renderCounter('intake_limiter_fallback_total', limiter.fallbackTotal),
+      ...renderCounter('intake_limiter_denied_total', limiter.deniedTotal),
+      ...renderCounter('intake_limiter_fail_closed_rejects_total', limiter.failClosedRejectsTotal),
+      ...renderCounter('intake_limiter_redis_timeouts_total', limiter.redisTimeoutsTotal),
+      ...renderCounter('intake_limiter_redis_errors_total', limiter.redisErrorsTotal),
+    );
+  }
+  lines.push('');
+  return lines.join('\n');
 }

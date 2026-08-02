@@ -5,10 +5,13 @@ import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  DegradingLimiter,
   GeoIndex,
   OFFER_REPLY_TTL_MS,
   REQUESTS_QUEUE,
+  SurgeStore,
   TRIP_EVENTS_QUEUE,
+  cellFor,
   driverChannel,
   offerReplyKey,
   type GeoPing,
@@ -42,6 +45,20 @@ export interface GatewayOptions {
   sweepIntervalMs?: number;
   /** App-level heartbeat staleness threshold (default 10s). */
   staleMs?: number;
+  /**
+   * Per-source GCRA on the ride-request intake path (§5.7). Keyed by the
+   * socket's authenticated principal (the rider/source). Defaults are generous
+   * so a normal fleet never trips them; the demo/tests tighten them to show
+   * rejection. Over-limit requests are rejected + counted, never silently
+   * dropped. Degrades fail-open by default (see DegradingLimiter).
+   */
+  rateLimit?: {
+    limit?: number;
+    windowMs?: number;
+    burst?: number;
+    failClosed?: boolean;
+    redisTimeoutMs?: number;
+  };
   /** Injectable clock for the Redis heartbeat/sweep (tests). */
   now?: () => number;
 }
@@ -60,6 +77,8 @@ export interface Gateway {
   driverSockets: ReadonlyMap<string, WebSocket>;
   /** Bounded send to a driver's socket. False if unknown, closed, or over the queue bound. */
   sendToDriver(driverId: string, data: string): boolean;
+  /** The intake rate limiter — exposed so /metrics can render its degradation counters. */
+  limiter: DegradingLimiter;
 }
 
 type InboundMessage =
@@ -138,17 +157,29 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     maxQueueBytes = 1024 * 1024,
     sweepIntervalMs = 2_000,
     staleMs = 10_000,
+    rateLimit,
     now = Date.now,
   } = opts;
 
   const metrics = createMetrics();
   const geoIndex = new GeoIndex(redis);
+  const surge = new SurgeStore(redis);
+  const limiter = new DegradingLimiter(redis, {
+    config: {
+      limit: rateLimit?.limit ?? 200,
+      windowMs: rateLimit?.windowMs ?? 1_000,
+      burst: rateLimit?.burst ?? 400,
+    },
+    failClosed: rateLimit?.failClosed ?? false,
+    redisTimeoutMs: rateLimit?.redisTimeoutMs ?? 50,
+    now,
+  });
   const app = Fastify({ logger: opts.logger ?? false });
 
   app.get('/healthz', () => ({ status: 'ok' }));
   app.get('/metrics', (_req, reply) => {
     void reply.type('text/plain; version=0.0.4');
-    return renderMetrics(metrics);
+    return renderMetrics(metrics, limiter.metrics);
   });
 
   // ---- batched ingestion: one buffer across all sockets ----
@@ -209,11 +240,43 @@ export function buildGateway(opts: GatewayOptions): Gateway {
         [requestId, lat, lng, destLat, destLng],
       );
       await redis.lpush(REQUESTS_QUEUE, requestId);
+      // Feed the surge demand window for this request's cell (§5.7). Best
+      // effort — a surge miss must never fail intake, so it rides its own
+      // catch and the enqueue above is already committed.
+      surge.recordDemand(cellFor(lat, lng), requestId, now()).catch((err: unknown) => {
+        app.log.error({ err, requestId }, 'surge demand record failed');
+      });
       metrics.rideRequestsEnqueuedTotal++;
     } catch (err) {
       metrics.rideRequestErrorsTotal++;
       app.log.error({ err, requestId }, 'ride request intake failed');
     }
+  }
+
+  // Rate-limited intake: check the per-source GCRA first, reject over-limit
+  // requests with a 429-equivalent back to the socket (counted, not dropped),
+  // otherwise persist + enqueue. `source` is the socket's authenticated
+  // principal — the rider/API identity the limit is keyed to.
+  async function rateLimitedIntake(
+    source: string,
+    socket: WebSocket,
+    msg: { requestId: string; lat: number; lng: number; destLat: number | null; destLng: number | null },
+  ): Promise<void> {
+    const decision = await limiter.limit(`intake:${source}`);
+    if (!decision.allowed) {
+      metrics.rideRequestsRateLimitedTotal++;
+      sendOn(
+        socket,
+        JSON.stringify({
+          type: 'ride_rejected',
+          requestId: msg.requestId,
+          reason: 'rate_limited',
+          retryAfterMs: Math.ceil(decision.retryAfterMs),
+        }),
+      );
+      return;
+    }
+    await intakeRequest(msg.requestId, msg.lat, msg.lng, msg.destLat, msg.destLng);
   }
 
   // ---- driver replies + trip progress: WS in, Redis lists out ----
@@ -368,7 +431,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
       }
       if (msg.kind === 'ride_request') {
         metrics.rideRequestsReceivedTotal++;
-        void intakeRequest(msg.requestId, msg.lat, msg.lng, msg.destLat, msg.destLng);
+        void rateLimitedIntake(principal, socket, msg);
         return;
       }
       if (msg.kind === 'offer_reply') {
@@ -426,5 +489,5 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
 
-  return { app, metrics, geoIndex, driverSockets, sendToDriver };
+  return { app, metrics, geoIndex, driverSockets, sendToDriver, limiter };
 }

@@ -12,7 +12,18 @@ const secret = process.env['GATEWAY_SECRET'] ?? 'fleetline-dev-secret';
 
 const redis = new Redis(redisUrl);
 const pool = createPool(databaseUrl);
-const { app } = buildGateway({ redis, secret, pool, logger: true });
+const { app } = buildGateway({
+  redis,
+  secret,
+  pool,
+  logger: true,
+  rateLimit: {
+    limit: Number(process.env['RATE_LIMIT_RPS'] ?? 200),
+    windowMs: Number(process.env['RATE_LIMIT_WINDOW_MS'] ?? 1_000),
+    burst: Number(process.env['RATE_LIMIT_BURST'] ?? 400),
+    failClosed: process.env['RATE_LIMIT_FAIL_CLOSED'] === 'true',
+  },
+});
 
 const shutdown = async (): Promise<void> => {
   await app.close();
