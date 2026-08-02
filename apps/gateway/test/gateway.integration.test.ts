@@ -8,7 +8,16 @@ import { Redis } from 'ioredis';
 import type pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { HEARTBEAT_ZSET, REQUESTS_QUEUE, cellKey, cellFor, driverKey } from '@fleetline/core';
+import {
+  HEARTBEAT_ZSET,
+  REQUESTS_QUEUE,
+  TRIP_EVENTS_QUEUE,
+  cellKey,
+  cellFor,
+  driverChannel,
+  driverKey,
+  offerReplyKey,
+} from '@fleetline/core';
 import { createPool, runMigrations } from '@fleetline/db';
 import { signToken } from '../src/auth.js';
 import { buildGateway, type Gateway, type GatewayOptions } from '../src/server.js';
@@ -199,6 +208,68 @@ describe('gateway (testcontainers redis, real sockets)', () => {
     await waitFor(() => gw.metrics.wsConnectionsActive === 0 && gw.driverSockets.size === 0);
   });
 
+  describe('offer transport (pub/sub down, lists up)', () => {
+    async function channelSubscribers(channel: string): Promise<number> {
+      const res = (await redis.pubsub('CHANNELS', channel)) as string[];
+      return res.length;
+    }
+
+    it('forwards driver-channel messages to the socket; subscribe on auth, unsubscribe on close', async () => {
+      const { gw, port } = await startGateway();
+      const ws = await connect(port, signToken('d1', SECRET));
+      const inbox: string[] = [];
+      ws.on('message', (data: Buffer) => inbox.push(String(data)));
+
+      await waitFor(async () => (await channelSubscribers(driverChannel('d1'))) === 1);
+      const offer = JSON.stringify({ type: 'offer', offerId: 'o1', tripId: 't1', driverId: 'd1' });
+      expect(await redis.publish(driverChannel('d1'), offer)).toBe(1);
+      await waitFor(() => inbox.length === 1);
+      expect(inbox[0]).toBe(offer);
+      expect(gw.metrics.messagesForwardedTotal).toBe(1);
+
+      ws.close();
+      await waitFor(async () => (await channelSubscribers(driverChannel('d1'))) === 0);
+      // Nobody listens anymore: the publish reaches no gateway at all.
+      expect(await redis.publish(driverChannel('d1'), offer)).toBe(0);
+    });
+
+    it('subscribes for drivers learned from pings on a multiplexed socket', async () => {
+      const { gw, port } = await startGateway();
+      const ws = await connect(port, signToken('sim', SECRET));
+      const inbox: string[] = [];
+      ws.on('message', (data: Buffer) => inbox.push(String(data)));
+      ping(ws, 'd7');
+      await waitFor(async () => (await channelSubscribers(driverChannel('d7'))) === 1);
+      await redis.publish(driverChannel('d7'), '{"type":"offer","offerId":"o7"}');
+      await waitFor(() => inbox.length === 1);
+      expect(gw.metrics.forwardDropsTotal).toBe(0);
+    });
+
+    it('offer replies land on the reply list with a TTL; trip progress lands on trip:events', async () => {
+      const { gw, port } = await startGateway();
+      const ws = await connect(port, signToken('d1', SECRET));
+
+      ws.send(JSON.stringify({ type: 'offer_reply', offerId: 'o1', driverId: 'd1', accept: true }));
+      await waitFor(() => gw.metrics.offerRepliesTotal === 1);
+      expect(await redis.lrange(offerReplyKey('o1'), 0, -1)).toEqual(['{"accept":true}']);
+      const pttl = await redis.pttl(offerReplyKey('o1'));
+      expect(pttl).toBeGreaterThan(0); // GCs itself if no matcher ever collects it
+
+      ws.send(JSON.stringify({ type: 'trip_progress', tripId: 't1', driverId: 'd1', event: 'arrived_pickup' }));
+      await waitFor(() => gw.metrics.tripProgressTotal === 1);
+      expect(await redis.lrange(TRIP_EVENTS_QUEUE, 0, -1)).toEqual([
+        JSON.stringify({ tripId: 't1', driverId: 'd1', event: 'arrived_pickup' }),
+      ]);
+
+      // Malformed variants are counted invalid, not forwarded.
+      ws.send(JSON.stringify({ type: 'offer_reply', offerId: 'o2', accept: 'yes' }));
+      ws.send(JSON.stringify({ type: 'trip_progress', tripId: 't1', driverId: 'd1', event: 'teleported' }));
+      await waitFor(() => gw.metrics.invalidMessagesTotal === 2);
+      expect(await redis.exists(offerReplyKey('o2'))).toBe(0);
+      expect(await redis.llen(TRIP_EVENTS_QUEUE)).toBe(1);
+    });
+  });
+
   describe('ride request intake (adds testcontainers postgres)', () => {
     let pgContainer: StartedPostgreSqlContainer;
     let pool: pg.Pool;
@@ -218,28 +289,28 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       await pool.query('TRUNCATE ride_requests, trips CASCADE');
     });
 
-    function request(ws: WebSocket, requestId: string): void {
-      ws.send(JSON.stringify({ type: 'ride_request', requestId, ...CENTER, ts: 0 }));
+    function request(ws: WebSocket, requestId: string, dest?: { destLat: number; destLng: number }): void {
+      ws.send(JSON.stringify({ type: 'ride_request', requestId, ...CENTER, ...dest, ts: 0 }));
     }
 
-    it('persists a pending row, then enqueues the id; duplicates dedupe on the row, not the queue', async () => {
+    it('persists a pending row (destination included), then enqueues the id; duplicates dedupe on the row, not the queue', async () => {
       const { gw, port } = await startGateway({ pool });
       const ws = await connect(port, signToken('rider', SECRET));
-      request(ws, 'r1');
-      request(ws, 'r1'); // duplicate delivery
-      request(ws, 'r2');
+      request(ws, 'r1', { destLat: 37.8, destLng: -122.4 });
+      request(ws, 'r1', { destLat: 37.8, destLng: -122.4 }); // duplicate delivery
+      request(ws, 'r2'); // destination-less requests survive too
 
       await waitFor(() => gw.metrics.rideRequestsEnqueuedTotal === 3);
       expect(gw.metrics.rideRequestsReceivedTotal).toBe(3);
       expect(gw.metrics.rideRequestErrorsTotal).toBe(0);
 
       // Exactly one row per request id, pending, at the request's coordinates.
-      const rows = await pool.query<{ id: string; status: string; lat: number }>(
-        'SELECT id, status, lat FROM ride_requests ORDER BY id',
+      const rows = await pool.query<{ id: string; status: string; lat: number; dest_lat: number | null }>(
+        'SELECT id, status, lat, dest_lat FROM ride_requests ORDER BY id',
       );
       expect(rows.rows).toEqual([
-        { id: 'r1', status: 'pending', lat: CENTER.lat },
-        { id: 'r2', status: 'pending', lat: CENTER.lat },
+        { id: 'r1', status: 'pending', lat: CENTER.lat, dest_lat: 37.8 },
+        { id: 'r2', status: 'pending', lat: CENTER.lat, dest_lat: null },
       ]);
 
       // The queue carries every delivery (at-least-once); the matcher's row

@@ -3,6 +3,8 @@ import { cellToLatLng } from 'h3-js';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CLAIM_PX_GRACE_MS,
+  CLAIMS_BY_EXPIRY,
   ClaimStore,
   GeoIndex,
   cellFor,
@@ -66,10 +68,13 @@ describe('atomic claim (testcontainers redis)', () => {
       token,
       expiresAt: T0 + TTL_MS,
     });
-    // PX safety net armed, but never longer than the authoritative expiry.
+    // PX safety net armed: ttl + the janitor's grace window (the janitor
+    // must be able to read the value shortly AFTER expiry).
     const pttl = await redis.pttl(claimKey('d1'));
-    expect(pttl).toBeGreaterThan(0);
-    expect(pttl).toBeLessThanOrEqual(TTL_MS);
+    expect(pttl).toBeGreaterThan(TTL_MS);
+    expect(pttl).toBeLessThanOrEqual(TTL_MS + CLAIM_PX_GRACE_MS);
+    // Indexed for the janitor, scored by the authoritative expiry.
+    expect(await redis.zscore(CLAIMS_BY_EXPIRY, 'd1')).toBe(String(T0 + TTL_MS));
   });
 
   it('fail-and-change-nothing: unknown, stale, already-claimed, out-of-set drivers', async () => {
@@ -167,5 +172,89 @@ describe('atomic claim (testcontainers redis)', () => {
     expect(await claims.releaseClaim('d1', token)).toBe(true);
     // Second release: claim key already gone.
     expect(await claims.releaseClaim('d1', token)).toBe(false);
+  });
+
+  it('the expiry ZSET tracks the claim lifecycle: claim adds, confirm and release remove', async () => {
+    await seed('d1');
+    await seed('d2', { lat: CENTER.lat + 1e-4, lng: CENTER.lng });
+    const t1 = (await claims.claimDriver('d1', 'trip-1', T0, FRESH_MS, TTL_MS))!;
+    const t2 = (await claims.claimDriver('d2', 'trip-2', T0 + 5, FRESH_MS, TTL_MS))!;
+    expect(await redis.zrange(CLAIMS_BY_EXPIRY, 0, -1, 'WITHSCORES')).toEqual([
+      'd1',
+      String(T0 + TTL_MS),
+      'd2',
+      String(T0 + 5 + TTL_MS),
+    ]);
+
+    expect(await claims.confirmClaim('d1', t1, T0 + 10)).toBe(true);
+    expect(await redis.zrange(CLAIMS_BY_EXPIRY, 0, -1)).toEqual(['d2']);
+    expect(await claims.releaseClaim('d2', t2)).toBe(true);
+    expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
+  });
+
+  it('freeDriver: on_trip → available in the CURRENT cell; any other status is a no-op', async () => {
+    const neighbor = kRing(C0, 1).find((c) => c !== C0)!;
+    await seed('d1');
+    const token = (await claims.claimDriver('d1', 'trip-1', T0, FRESH_MS, TTL_MS))!;
+    expect(await claims.confirmClaim('d1', token, T0 + 1)).toBe(true);
+    // Driver drove to the neighbor cell during the trip.
+    await index.applyPings([{ driverId: 'd1', ...centerOf(neighbor) }], T0 + 1000);
+
+    expect(await claims.freeDriver('d1')).toBe(true);
+    expect(await redis.hget(driverKey('d1'), 'status')).toBe('available');
+    expect(await redis.smembers(cellKey(neighbor))).toEqual(['d1']);
+    expect(await redis.smembers(cellKey(C0))).toEqual([]);
+    // Duplicate trip_done (at-least-once queue): no-op.
+    expect(await claims.freeDriver('d1')).toBe(false);
+  });
+
+  describe('janitorRelease (the sweep primitive)', () => {
+    it('live claim: no-op', async () => {
+      await seed('d1');
+      await claims.claimDriver('d1', 'trip-1', T0, FRESH_MS, TTL_MS);
+      expect(await claims.janitorRelease('d1', T0 + TTL_MS - 1)).toEqual({ kind: 'live' });
+      expect(await redis.hget(driverKey('d1'), 'status')).toBe('claimed');
+      expect(await redis.exists(claimKey('d1'))).toBe(1);
+    });
+
+    it('expired claim: DEL + ZREM + driver back to its current cell, tripId returned', async () => {
+      const neighbor = kRing(C0, 1).find((c) => c !== C0)!;
+      await seed('mover', centerOf(C0));
+      await claims.claimDriver('mover', 'trip-9', T0, FRESH_MS, TTL_MS);
+      await index.applyPings([{ driverId: 'mover', ...centerOf(neighbor) }], T0 + 1000);
+
+      expect(await claims.expiredClaims(T0 + TTL_MS - 1)).toEqual([]);
+      expect(await claims.expiredClaims(T0 + TTL_MS)).toEqual(['mover']);
+      expect(await claims.janitorRelease('mover', T0 + TTL_MS)).toEqual({ kind: 'released', tripId: 'trip-9' });
+      expect(await redis.hget(driverKey('mover'), 'status')).toBe('available');
+      expect(await redis.smembers(cellKey(neighbor))).toEqual(['mover']);
+      expect(await redis.exists(claimKey('mover'))).toBe(0);
+      expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
+      // Released driver is claimable again.
+      expect(await claims.claimDriver('mover', 'trip-10', T0 + 1000, FRESH_MS, TTL_MS)).not.toBeNull();
+    });
+
+    it('does NOT free an offline (silence-swept) driver into an available set', async () => {
+      await seed('quiet');
+      await claims.claimDriver('quiet', 'trip-1', T0, FRESH_MS, TTL_MS);
+      // The gateway sweep declared it dead while claimed.
+      await index.sweepStale(T0 + FRESH_MS + 1, FRESH_MS);
+      expect(await redis.hget(driverKey('quiet'), 'status')).toBe('offline');
+
+      const res = await claims.janitorRelease('quiet', T0 + TTL_MS);
+      expect(res).toEqual({ kind: 'released', tripId: 'trip-1' });
+      expect(await redis.hget(driverKey('quiet'), 'status')).toBe('offline');
+      expect(await redis.smembers(cellKey(C0))).toEqual([]);
+    });
+
+    it('key already erased by the PX net: ZSET cleaned, stuck-claimed driver repaired', async () => {
+      await seed('d1');
+      await claims.claimDriver('d1', 'trip-1', T0, FRESH_MS, TTL_MS);
+      await redis.del(claimKey('d1')); // simulate the PX firing
+      expect(await claims.janitorRelease('d1', T0 + TTL_MS)).toEqual({ kind: 'gone', repaired: true });
+      expect(await redis.hget(driverKey('d1'), 'status')).toBe('available');
+      expect(await redis.smembers(cellKey(C0))).toEqual(['d1']);
+      expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
+    });
   });
 });

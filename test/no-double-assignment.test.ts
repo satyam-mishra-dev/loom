@@ -4,7 +4,15 @@ import { cellToLatLng } from 'h3-js';
 import { Redis } from 'ioredis';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { GeoIndex, cellFor, cellKey, driverKey, type GeoPing } from '@fleetline/core';
+import {
+  CLAIMS_BY_EXPIRY,
+  GeoIndex,
+  cellFor,
+  cellKey,
+  driverKey,
+  offerReplyKey,
+  type GeoPing,
+} from '@fleetline/core';
 import { createPool, runMigrations } from '@fleetline/db';
 import { MatcherCore } from '@fleetline/matcher';
 
@@ -13,9 +21,11 @@ import { MatcherCore } from '@fleetline/matcher';
  *
  * 20 available drivers in ONE res-8 cell, 200 ride requests fired through the
  * real matching path concurrently (real Redis, real Postgres, real Lua claim,
- * real partial unique index — nothing mocked). Exactly 20 trips, exactly 180
+ * real offer round-trip over pub/sub + reply lists, real partial unique index
+ * — nothing mocked; drivers auto-accept). Exactly 20 trips, exactly 180
  * honest unmatched, every assigned driver unique in Postgres AND consistent
- * in Redis, and the defense-in-depth index never fired.
+ * in Redis, and the defense-in-depth index never fired. The crash variant
+ * lives in test/no-double-assignment-crash.test.ts.
  */
 
 const DRIVERS = 20;
@@ -30,6 +40,7 @@ describe('SIGNATURE: no double assignment', () => {
   let redisContainer: StartedRedisContainer;
   let pgContainer: StartedPostgreSqlContainer;
   let redis: Redis;
+  let autoAccept: Redis;
   let pool: pg.Pool;
 
   beforeAll(async () => {
@@ -40,17 +51,29 @@ describe('SIGNATURE: no double assignment', () => {
     redis = new Redis(redisContainer.getConnectionUrl());
     await runMigrations(pgContainer.getConnectionUri());
     pool = createPool(pgContainer.getConnectionUri());
+
+    // The fake fleet: every driver accepts every offer, instantly, over the
+    // real transport (pub/sub in, reply list out).
+    autoAccept = redis.duplicate();
+    autoAccept.on('pmessage', (_p: string, _c: string, message: string) => {
+      const msg = JSON.parse(message) as { type: string; offerId?: string };
+      if (msg.type === 'offer' && msg.offerId !== undefined) {
+        void redis.lpush(offerReplyKey(msg.offerId), JSON.stringify({ accept: true }));
+      }
+    });
+    await autoAccept.psubscribe('driver:*:msg');
   }, 240_000);
 
   afterAll(async () => {
     await pool.end();
+    autoAccept.disconnect();
     redis.disconnect();
     await Promise.all([redisContainer.stop(), pgContainer.stop()]);
   });
 
   beforeEach(async () => {
     await redis.flushall();
-    await pool.query('TRUNCATE ride_requests, trips CASCADE');
+    await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
 
     // Seed the fleet: 20 drivers, all available, all pinged into ONE cell
     // through the real GeoIndex ingestion path.
@@ -113,8 +136,22 @@ describe('SIGNATURE: no double assignment', () => {
     );
     expect(linkage.rows[0]?.n).toBe(DRIVERS);
 
+    // Phase D: an accepted offer carries the trip through matched → en_route,
+    // and every trip's outbox chain is complete up to that hop.
+    const statuses = await pool.query<{ status: string; n: number }>(
+      'SELECT status, count(*)::int AS n FROM trips GROUP BY status',
+    );
+    expect(statuses.rows).toEqual([{ status: 'en_route', n: DRIVERS }]);
+    const chains = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM trips t
+       WHERE (SELECT string_agg(e.type, ',' ORDER BY e.id) FROM trip_events e WHERE e.trip_id = t.id)
+             = 'requested,matching,offered,matched,en_route'`,
+    );
+    expect(chains.rows[0]?.n).toBe(DRIVERS);
+
     // Redis agrees with Postgres: no tripped driver lingers in ANY available
-    // set, every tripped driver is on_trip, no claim keys survive.
+    // set, every tripped driver is on_trip, no claim keys or expiry-ZSET
+    // entries survive.
     const tripped = new Set(trips.rows.map((t) => t.driver_id));
     for (const key of await redis.keys('cell:*:available')) {
       for (const member of await redis.smembers(key)) {
@@ -125,6 +162,7 @@ describe('SIGNATURE: no double assignment', () => {
       expect(await redis.hget(driverKey(driverId), 'status')).toBe('on_trip');
     }
     expect(await redis.keys('claim:*')).toEqual([]);
+    expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
   }
 
   it(`${REQUESTS} concurrent requests, ${DRIVERS} drivers: exactly ${DRIVERS} trips, zero double assignment`, async () => {

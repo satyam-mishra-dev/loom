@@ -3,13 +3,23 @@ import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redi
 import { Redis } from 'ioredis';
 import type pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { GeoIndex, REQUESTS_PROCESSING, REQUESTS_QUEUE, cellKey, cellFor, driverKey } from '@fleetline/core';
+import {
+  GeoIndex,
+  REQUESTS_PROCESSING,
+  REQUESTS_QUEUE,
+  cellKey,
+  cellFor,
+  driverKey,
+  offerReplyKey,
+} from '@fleetline/core';
 import { createPool, runMigrations } from '@fleetline/db';
 import { MatcherCore } from '../src/matcher.js';
 
 // The matcher as a service: real consumer loops over real Redis lists, real
 // trips in real Postgres. The 200-request concurrency proof lives in the
-// repo-root signature test; this suite covers the service mechanics.
+// repo-root signature test; this suite covers the service mechanics. Drivers
+// auto-accept every offer here — cascade behaviors (decline, timeout,
+// janitor) live in cascade.integration.test.ts.
 
 const CENTER = { lat: 37.7749, lng: -122.4194 };
 const C0 = cellFor(CENTER.lat, CENTER.lng);
@@ -26,6 +36,7 @@ describe('matcher service (testcontainers redis + postgres)', () => {
   let redisContainer: StartedRedisContainer;
   let pgContainer: StartedPostgreSqlContainer;
   let redis: Redis;
+  let autoAccept: Redis;
   let pool: pg.Pool;
   let geo: GeoIndex;
   const cores: MatcherCore[] = [];
@@ -39,17 +50,28 @@ describe('matcher service (testcontainers redis + postgres)', () => {
     await runMigrations(pgContainer.getConnectionUri());
     pool = createPool(pgContainer.getConnectionUri());
     geo = new GeoIndex(redis);
+
+    // Every driver accepts every offer, instantly.
+    autoAccept = redis.duplicate();
+    autoAccept.on('pmessage', (_p: string, _c: string, message: string) => {
+      const msg = JSON.parse(message) as { type: string; offerId?: string };
+      if (msg.type === 'offer' && msg.offerId !== undefined) {
+        void redis.lpush(offerReplyKey(msg.offerId), JSON.stringify({ accept: true }));
+      }
+    });
+    await autoAccept.psubscribe('driver:*:msg');
   }, 240_000);
 
   afterAll(async () => {
     await pool.end();
+    autoAccept.disconnect();
     redis.disconnect();
     await Promise.all([redisContainer.stop(), pgContainer.stop()]);
   });
 
   beforeEach(async () => {
     await redis.flushall();
-    await pool.query('TRUNCATE ride_requests, trips CASCADE');
+    await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
   });
 
   afterEach(async () => {
