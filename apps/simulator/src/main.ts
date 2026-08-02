@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import type { ServerMessage } from '@fleetline/core';
 import { Simulation } from './sim.js';
@@ -17,8 +18,21 @@ const { values } = parseArgs({
     'accept-prob': { type: 'string', default: '0.8' },
     'city-m': { type: 'string', default: '0' },
     'request-ticks': { type: 'string', default: '0' },
+    'response-min-ms': { type: 'string', default: '500' },
+    'response-max-ms': { type: 'string', default: '3000' },
+    // When set, the sim mints its own gateway token (same HMAC scheme as
+    // apps/gateway/src/auth.ts) so `docker compose up` needs no pre-signed URL.
+    'auth-secret': { type: 'string', default: '' },
+    principal: { type: 'string', default: 'sim' },
   },
 });
+
+/** Append a gateway token to the ws URL if one isn't already present (see auth.ts). */
+function withToken(url: string, principal: string, secret: string): string {
+  if (secret === '' || url.includes('token=')) return url;
+  const mac = createHmac('sha256', secret).update(principal).digest('hex');
+  return `${url}${url.includes('?') ? '&' : '?'}token=${principal}.${mac}`;
+}
 
 function num(name: string, raw: string, min: number): number {
   const n = Number(raw);
@@ -38,9 +52,21 @@ const maxTicks = num('ticks', values.ticks, 0); // 0 = run until interrupted
 const acceptProb = num('accept-prob', values['accept-prob'], 0);
 const cityM = num('city-m', values['city-m'], 0); // 0 = default 10km city
 const requestTicks = num('request-ticks', values['request-ticks'], 0); // 0 = every tick
+// Offer think-time window (simulated ms). Bench sets both to 0 so the measured
+// request→match latency is the engine's, not simulated human delay.
+const responseMinMs = num('response-min-ms', values['response-min-ms'], 0);
+const responseMaxMs = num('response-max-ms', values['response-max-ms'], responseMinMs);
 
 const city = cityM > 0 ? { ...DEFAULT_CITY, widthM: cityM, heightM: cityM } : DEFAULT_CITY;
-const sim = new Simulation({ drivers, ratePerSec: rps, hotspots, seed, city, acceptProb });
+const sim = new Simulation({
+  drivers,
+  ratePerSec: rps,
+  hotspots,
+  seed,
+  city,
+  acceptProb,
+  responseDelayMs: { min: responseMinMs, max: responseMaxMs },
+});
 
 // Offer/trip counters for the exit stats.
 let offers = 0;
@@ -73,7 +99,8 @@ function onServerMessage(msg: ServerMessage): void {
   if (sim.assignTrip(msg.driverId, msg.tripId, msg.pickup, msg.dest)) tripsAssigned++;
 }
 
-const sink = createSink(values.sink, values.gateway, onServerMessage);
+const gatewayUrl = withToken(values.gateway, values.principal, values['auth-secret']);
+const sink = createSink(values.sink, gatewayUrl, onServerMessage);
 
 const tickMs = 1000 / speedup; // one simulated second per tick
 const startedAt = performance.now();
