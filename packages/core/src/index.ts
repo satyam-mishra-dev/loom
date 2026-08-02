@@ -5,3 +5,6 @@ export * from './claim.js';
 export * from './trip-machine.js';
 export * from './scoring.js';
 export * from './metrics.js';
+export * from './gcra.js';
+export * from './limiter.js';
+export * from './surge.js';
