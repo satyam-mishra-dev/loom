@@ -98,6 +98,14 @@ export interface ReadModelOptions {
   tripCap?: number;
   /** Center for /spawn-generated requests (defaults to the simulator's city center). */
   center?: { lat: number; lng: number };
+  /**
+   * Demo-grade shared token gating the MUTATING /spawn and STREAMING /events
+   * endpoints (G3). When set, both require `?token=<it>`; unset leaves them open
+   * (bare local dev) with a startup warning. The dashboard is served the token
+   * at build time, so it is a scan/curl deterrent, not user auth — a session or
+   * signed cookie is the production upgrade (see DECISIONS.md).
+   */
+  authToken?: string | undefined;
   logger?: boolean;
   now?: () => number;
 }
@@ -137,10 +145,14 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
     driverCap = 1_500,
     tripCap = 500,
     center = { lat: 37.7749, lng: -122.4194 },
+    authToken,
     now = Date.now,
   } = opts;
 
   const app = Fastify({ logger: opts.logger ?? false });
+  if (authToken === undefined) {
+    app.log.warn('read-model auth disabled — /spawn and /events are OPEN (set READ_MODEL_TOKEN; demo/local only)');
+  }
   const surge = new SurgeStore(redis);
   const sseClients = new Set<ServerResponse>();
 
@@ -279,6 +291,16 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
     if (req.method === 'OPTIONS') {
       void reply.code(204).send();
       return;
+    }
+    // G3: gate the mutating (/spawn) and streaming (/events) endpoints behind
+    // the shared token when one is configured. /healthz and /metrics stay open
+    // for the compose healthcheck and scraping.
+    if (authToken !== undefined && (req.url.startsWith('/spawn') || req.url.startsWith('/events'))) {
+      const provided = new URL(req.url, 'http://localhost').searchParams.get('token');
+      if (provided !== authToken) {
+        void reply.code(401).send({ error: 'unauthorized' });
+        return;
+      }
     }
     done();
   });

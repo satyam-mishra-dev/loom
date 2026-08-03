@@ -30,6 +30,10 @@ FROM deps AS dashboard-build
 COPY . .
 ARG VITE_READMODEL_URL=http://localhost:4600
 ENV VITE_READMODEL_URL=$VITE_READMODEL_URL
+# Demo-grade token baked into the bundle so the dashboard can reach the read
+# model's now-gated /events + /spawn. Must match the read model's READ_MODEL_TOKEN.
+ARG VITE_READMODEL_TOKEN=fleetline-demo-token
+ENV VITE_READMODEL_TOKEN=$VITE_READMODEL_TOKEN
 RUN npm run build --workspace=@fleetline/dashboard
 
 # ---- dashboard: serve the static bundle with a zero-dep node server ----

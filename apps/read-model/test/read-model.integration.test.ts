@@ -159,6 +159,40 @@ describe('read model (testcontainers redis + postgres)', () => {
     expect(await redis.llen('requests:queue')).toBe(10);
   });
 
+  it('G3: /spawn and /events require the token when one is configured; /healthz stays open', async () => {
+    await seedFleet(2);
+    const rm = buildReadModel({
+      redis,
+      pool,
+      authToken: 'secret',
+      tickMs: 300,
+      matcherMetricsUrl: 'http://127.0.0.1:1/none',
+    });
+    await rm.app.listen({ port: 0, host: '127.0.0.1' });
+    rm.start();
+    try {
+      const port = (rm.app.server.address() as AddressInfo).port;
+
+      // /spawn: no token and wrong token are rejected; the right token works.
+      expect((await rm.app.inject({ method: 'POST', url: '/spawn', payload: { n: 1 } })).statusCode).toBe(401);
+      expect((await rm.app.inject({ method: 'POST', url: '/spawn?token=nope', payload: { n: 1 } })).statusCode).toBe(401);
+      expect((await rm.app.inject({ method: 'POST', url: '/spawn?token=secret', payload: { n: 1 } })).statusCode).toBe(200);
+
+      // /events without a token is rejected before the SSE hijack.
+      expect((await rm.app.inject({ method: 'GET', url: '/events' })).statusCode).toBe(401);
+
+      // /healthz and /metrics stay open (compose healthcheck + scraping).
+      expect((await rm.app.inject({ method: 'GET', url: '/healthz' })).statusCode).toBe(200);
+
+      // With the token, /events streams normally over real HTTP.
+      const frames = await collectSse(`http://127.0.0.1:${port}/events?token=secret`, 1);
+      expect(frames.length).toBeGreaterThanOrEqual(1);
+      expect(frames[0]?.driversTotal).toBe(2);
+    } finally {
+      await rm.stop();
+    }
+  });
+
   it('scrapes matcher counters (matches/sec, p50/p99) from /metrics', async () => {
     let matches = 100;
     const fake = http.createServer((_req, res) => {

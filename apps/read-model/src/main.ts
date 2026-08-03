@@ -2,7 +2,26 @@ import { Redis } from 'ioredis';
 import { createPool } from '@fleetline/db';
 import { buildReadModel } from './server.js';
 
-const port = Number(process.env['PORT'] ?? 4600);
+// Validate numeric env: a raw Number(env) that parses to NaN would feed
+// setInterval(fn, NaN) — which fires as fast as the event loop can, DoS-ing the
+// snapshot query against its own deps. envInt requires a positive number;
+// envFinite allows any finite value (the map center may be negative).
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got "${raw}"`);
+  return n;
+}
+function envFinite(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(`${name} must be a finite number, got "${raw}"`);
+  return n;
+}
+
+const port = envInt('PORT', 4600);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl =
   process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
@@ -15,11 +34,12 @@ const rm = buildReadModel({
   pool,
   matcherMetricsUrl,
   logger: true,
-  tickMs: Number(process.env['READ_MODEL_TICK_MS'] ?? 1_000),
+  tickMs: envInt('READ_MODEL_TICK_MS', 1_000),
   center: {
-    lat: Number(process.env['CENTER_LAT'] ?? 37.7749),
-    lng: Number(process.env['CENTER_LNG'] ?? -122.4194),
+    lat: envFinite('CENTER_LAT', 37.7749),
+    lng: envFinite('CENTER_LNG', -122.4194),
   },
+  authToken: process.env['READ_MODEL_TOKEN'],
 });
 
 const shutdown = async (): Promise<void> => {

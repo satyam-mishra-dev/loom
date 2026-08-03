@@ -7,6 +7,11 @@ import type { Layer } from '@deck.gl/core';
 import type { DriverDot, Snapshot, SurgeCell, TripArc } from './types.js';
 
 const READMODEL_URL = (import.meta.env['VITE_READMODEL_URL'] as string | undefined) ?? 'http://localhost:4600';
+// Demo-grade shared token for the read model's /events + /spawn (baked at build
+// time). Empty = the read model is running open (bare local dev).
+const READMODEL_TOKEN = (import.meta.env['VITE_READMODEL_TOKEN'] as string | undefined) ?? '';
+const readUrl = (path: string): string =>
+  READMODEL_TOKEN === '' ? `${READMODEL_URL}${path}` : `${READMODEL_URL}${path}?token=${encodeURIComponent(READMODEL_TOKEN)}`;
 const CENTER = {
   lat: Number(import.meta.env['VITE_CENTER_LAT'] ?? 37.7749),
   lng: Number(import.meta.env['VITE_CENTER_LNG'] ?? -122.4194),
@@ -39,7 +44,7 @@ export function App(): ReactElement {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const es = new EventSource(`${READMODEL_URL}/events`);
+    const es = new EventSource(readUrl('/events'));
     es.onopen = () => setConnected(true);
     es.onmessage = (ev) => {
       try {
@@ -55,7 +60,7 @@ export function App(): ReactElement {
   async function spawn(n: number): Promise<void> {
     setBusy(true);
     try {
-      await fetch(`${READMODEL_URL}/spawn`, {
+      await fetch(readUrl('/spawn'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ n, hotspot }),

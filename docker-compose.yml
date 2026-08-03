@@ -115,6 +115,9 @@ services:
       MATCHER_METRICS_URL: http://matcher:8090/metrics
       CENTER_LAT: '37.7749'
       CENTER_LNG: '-122.4194'
+      # Demo-grade token gating /spawn + /events; the dashboard build bakes the
+      # same value (VITE_READMODEL_TOKEN) so the map streams end to end.
+      READ_MODEL_TOKEN: ${READMODEL_TOKEN:-fleetline-demo-token}
     ports:
       - '4600:4600'
     depends_on:
@@ -155,6 +158,7 @@ services:
       target: dashboard
       args:
         VITE_READMODEL_URL: ${VITE_READMODEL_URL:-http://localhost:4600}
+        VITE_READMODEL_TOKEN: ${READMODEL_TOKEN:-fleetline-demo-token}
     ports:
       - '4620:4620'
     depends_on:
