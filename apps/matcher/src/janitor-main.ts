@@ -7,10 +7,20 @@ import { Janitor } from './janitor.js';
 // alone (`npm run janitor --workspace=@fleetline/matcher`) — proof that claim
 // recovery needs no matcher alive, only the data.
 
+// Validate numeric env: setInterval(fn, NaN) from a bad JANITOR_SWEEP_MS would
+// spin as fast as the event loop, hammering Redis/Postgres. Require positive.
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got "${raw}"`);
+  return n;
+}
+
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl =
   process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
-const sweepIntervalMs = Number(process.env['JANITOR_SWEEP_MS'] ?? 1_000);
+const sweepIntervalMs = envInt('JANITOR_SWEEP_MS', 1_000);
 
 const log = pino({ name: 'janitor' });
 const redis = new Redis(redisUrl);

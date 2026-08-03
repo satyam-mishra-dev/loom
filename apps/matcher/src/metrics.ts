@@ -23,9 +23,11 @@ export interface MatcherMetrics {
   cascadeLostTotal: number;
   /** Trips advanced to completed by the progression consumer. */
   tripsCompletedTotal: number;
-  /** trip_progress messages the machine guards refused (duplicate/stale/out of order). */
+  /** trip_progress messages the machine guards refused (duplicate/stale/spoof/terminal). */
   tripEventGuardFailuresTotal: number;
-  /** Request pop → terminal status, ms. */
+  /** trip_progress events re-queued because a predecessor had not landed yet (cross-instance reorder). */
+  tripEventPrematureTotal: number;
+  /** Request pop → terminal status, ms (matched path only). */
   matchLatencyMs: Hist;
 }
 
@@ -45,6 +47,7 @@ export function createMetrics(): MatcherMetrics {
     cascadeLostTotal: 0,
     tripsCompletedTotal: 0,
     tripEventGuardFailuresTotal: 0,
+    tripEventPrematureTotal: 0,
     matchLatencyMs: new Hist(),
   };
 }
@@ -57,6 +60,10 @@ export interface JanitorMetrics {
   janitorRequeuedTotal: number;
   /** Claim keys already erased by the PX net when the sweep arrived. */
   janitorGoneTotal: number;
+  /** Reconcile passes over drivers stuck 'on_trip' with no active trip. */
+  reconcileSweepsTotal: number;
+  /** Drivers stuck 'on_trip' (trip_done committed, freeDriver never ran) that the reconciler freed. */
+  stuckDriversFreedTotal: number;
   sweepErrorsTotal: number;
 }
 
@@ -66,6 +73,8 @@ export function createJanitorMetrics(): JanitorMetrics {
     janitorReleasedTotal: 0,
     janitorRequeuedTotal: 0,
     janitorGoneTotal: 0,
+    reconcileSweepsTotal: 0,
+    stuckDriversFreedTotal: 0,
     sweepErrorsTotal: 0,
   };
 }
@@ -86,6 +95,7 @@ export function renderMetrics(m: MatcherMetrics, j?: JanitorMetrics): string {
     ...renderCounter('cascade_lost_total', m.cascadeLostTotal),
     ...renderCounter('trips_completed_total', m.tripsCompletedTotal),
     ...renderCounter('trip_event_guard_failures_total', m.tripEventGuardFailuresTotal),
+    ...renderCounter('trip_event_premature_total', m.tripEventPrematureTotal),
     ...renderSummary('match_latency_ms', m.matchLatencyMs),
   ];
   if (j !== undefined) {
@@ -94,6 +104,8 @@ export function renderMetrics(m: MatcherMetrics, j?: JanitorMetrics): string {
       ...renderCounter('janitor_released_total', j.janitorReleasedTotal),
       ...renderCounter('janitor_requeued_total', j.janitorRequeuedTotal),
       ...renderCounter('janitor_gone_total', j.janitorGoneTotal),
+      ...renderCounter('janitor_reconcile_sweeps_total', j.reconcileSweepsTotal),
+      ...renderCounter('janitor_stuck_drivers_freed_total', j.stuckDriversFreedTotal),
       ...renderCounter('janitor_sweep_errors_total', j.sweepErrorsTotal),
     );
   }

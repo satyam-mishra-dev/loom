@@ -43,8 +43,11 @@ export interface MatcherOptions {
 
 export type MatchOutcome = 'matched' | 'unmatched' | 'skipped';
 
-/** Requests stuck 'pending' longer than this are re-enqueued at startup (lost-LPUSH net). */
+/** Requests stuck 'pending'/'matching' longer than this are re-enqueued at startup. */
 const REQUEUE_PENDING_MS = 30_000;
+
+/** Backoff before re-queuing a premature trip-progress event, so its predecessor can land first. */
+const PREMATURE_RETRY_DELAY_MS = 50;
 
 /**
  * The matching pipeline: request → candidates → score → ATOMIC CLAIM →
@@ -193,12 +196,20 @@ export class MatcherCore {
         if (verdict === true) {
           const accepted = await this.trips.acceptOffer({ tripId, offerId, requestId });
           if (accepted === 'conflict') {
-            // Redis let a double-claim through — the partial unique index
-            // just saved the invariant. Counted, loud, cascade continues.
+            // Redis let a double-claim through — the partial unique index just
+            // saved the invariant. The acceptOffer TX rolled back, so the trip
+            // is still 'offered' and ours: revert it (offered → matching,
+            // mirroring the decline path) BEFORE releasing the claim so the
+            // cascade can try the next candidate. Without this the trip stays
+            // 'offered' forever — the next candidate's offerTrip is an illegal
+            // offered→OFFER_SENT and the request strands. If the revert lost the
+            // row (a janitor/peer took it), fall through to finishUnmatched.
             this.metrics.pgUniqueViolationsTotal++;
             this.log.error({ tripId, requestId, driverId }, 'PARTIAL UNIQUE INDEX VIOLATION');
+            const reverted = await this.trips.revertOffer(tripId, offerId, 'OFFER_DECLINED');
             await this.claims.releaseClaim(driverId, token);
-            continue;
+            if (reverted) continue;
+            break;
           }
           if (accepted === 'lost') {
             await this.claims.releaseClaim(driverId, token);
@@ -252,7 +263,10 @@ export class MatcherCore {
       return 'skipped';
     }
     this.metrics.unmatchedTotal++;
-    this.metrics.matchLatencyMs.observe(performance.now() - started);
+    // matchLatencyMs is deliberately observed on the MATCHED path only: an
+    // unmatched request carries the full cascade timeout (up to ~40s), which
+    // would smear the dashboard's live match p50/p99. The bench computes its
+    // own matched-only DB percentiles and is unaffected either way.
     this.log.info({ requestId, offers, candidates: candidates.length }, 'unmatched');
     return 'unmatched';
   }
@@ -313,12 +327,36 @@ export class MatcherCore {
     while ((await this.redis.lmove(TRIP_EVENTS_PROCESSING, TRIP_EVENTS_QUEUE, 'LEFT', 'RIGHT')) !== null) {
       recovered++;
     }
-    const stale = await this.pool.query<{ id: string }>(
-      `SELECT id FROM ride_requests WHERE status = 'pending'
-       AND created_at < now() - ($1::int * interval '1 millisecond')`,
+    // Requests stranded past the grace window. 'pending' rows lost their LPUSH;
+    // 'matching' rows were abandoned mid-cascade — a dead matcher, or a janitor
+    // 'gone' repair that freed the driver but left the trip 'offered'. This one
+    // broadening backstops BOTH the C1 conflict residual and the O2 past-grace
+    // stranding: for a 'matching' row with a trip, janitorRevert the trip
+    // (offered/matching → matching, request → pending) first, then re-enqueue.
+    const stale = await this.pool.query<{ id: string; status: string }>(
+      `SELECT id, status FROM ride_requests
+       WHERE status IN ('pending', 'matching')
+         AND created_at < now() - ($1::int * interval '1 millisecond')`,
       [REQUEUE_PENDING_MS],
     );
-    for (const { id } of stale.rows) {
+    for (const { id, status } of stale.rows) {
+      if (status === 'matching') {
+        const trip = await this.pool.query<{ id: string }>('SELECT id FROM trips WHERE request_id = $1', [id]);
+        const tripId = trip.rows[0]?.id;
+        if (tripId !== undefined) {
+          // Revert the trip and hand the request back to pending. Null means the
+          // trip went live (matched/en_route/…) and belongs to a live cascade —
+          // leave it entirely.
+          if ((await this.trips.janitorRevert(tripId)) === null) continue;
+        } else {
+          // 'matching' with no trip row: a matcher died right after the
+          // pending→matching UPDATE. Nobody owns it — hand it back.
+          await this.pool.query(
+            `UPDATE ride_requests SET status = 'pending' WHERE id = $1 AND status = 'matching'`,
+            [id],
+          );
+        }
+      }
       await this.redis.lpush(REQUESTS_QUEUE, id);
       recovered++;
     }
@@ -391,16 +429,28 @@ export class MatcherCore {
       this.metrics.tripEventGuardFailuresTotal++;
       return;
     }
-    if (!(await this.trips.progress(tripId, driverId, event))) {
+    const outcome = await this.trips.progress(tripId, driverId, event);
+    if (outcome === 'premature') {
+      // A predecessor event has not landed yet — happens when two matcher
+      // instances split the trip-progress consumer and consume trip_done before
+      // arrived_pickup. DO NOT drop it (that would strand the trip 'in_trip' and
+      // the driver 'on_trip' forever): re-queue after a short backoff so the
+      // predecessor commits first, then retry. This delivery is then acked by
+      // the loop, leaving exactly the one re-queued copy.
+      this.metrics.tripEventPrematureTotal++;
+      await new Promise((resolve) => setTimeout(resolve, PREMATURE_RETRY_DELAY_MS));
+      await this.redis.lpush(TRIP_EVENTS_QUEUE, raw);
+      return;
+    }
+    if (outcome === 'terminal') {
       this.metrics.tripEventGuardFailuresTotal++;
-      this.log.warn({ tripId, driverId, event }, 'trip progress refused by machine guard');
+      this.log.warn({ tripId, driverId, event }, 'trip progress dropped (duplicate/late/spoof/terminal)');
       return;
     }
     if (event === 'trip_done') {
       // Trip row is final; hand the driver back to the index. A crash between
       // the commit above and this call leaves the driver 'on_trip' with no
-      // active trip — ponytail: no repair sweep for that sliver; add an
-      // on_trip-without-active-trip reconciler if it ever shows up in metrics.
+      // active trip — the janitor's reconcileStuckOnTrip backstop frees it.
       await this.claims.freeDriver(driverId);
       this.metrics.tripsCompletedTotal++;
       this.log.info({ tripId, driverId }, 'trip completed, driver freed');

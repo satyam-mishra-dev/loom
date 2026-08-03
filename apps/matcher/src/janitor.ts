@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
-import { ClaimStore, REQUESTS_QUEUE } from '@fleetline/core';
+import { ClaimStore, REQUESTS_QUEUE, driverKey } from '@fleetline/core';
 import { createJanitorMetrics, type JanitorMetrics } from './metrics.js';
 import { TripStore } from './trip-store.js';
 
@@ -9,8 +9,12 @@ export interface JanitorOptions {
   redis: Redis;
   pool: pg.Pool;
   log?: Logger;
-  /** How often to sweep (default 1s). */
+  /** How often to sweep expired claims (default 1s). */
   sweepIntervalMs?: number;
+  /** How often to reconcile drivers stuck 'on_trip' with no active trip (default 15s). */
+  reconcileIntervalMs?: number;
+  /** Max terminal-trip drivers checked per reconcile pass (default 1000). */
+  reconcileLimit?: number;
   /** Injectable clock (tests). */
   now?: () => number;
 }
@@ -45,10 +49,19 @@ export class Janitor {
   private readonly trips: TripStore;
   private readonly log: Logger;
   private readonly sweepIntervalMs: number;
+  private readonly reconcileIntervalMs: number;
+  private readonly reconcileLimit: number;
   private readonly now: () => number;
 
   private timer: NodeJS.Timeout | null = null;
-  private sweeping: Promise<void> = Promise.resolve();
+  private reconcileTimer: NodeJS.Timeout | null = null;
+  // Re-entry guards: a sweep/reconcile slower than its interval must not stack.
+  private sweepRunning = false;
+  private reconcileRunning = false;
+  // The REAL in-flight promise (not just the latest scheduled one) so stop()
+  // can await whatever is actually mid-flight before the pool/redis close.
+  private sweepInFlight: Promise<void> = Promise.resolve();
+  private reconcileInFlight: Promise<void> = Promise.resolve();
 
   constructor(opts: JanitorOptions) {
     this.redis = opts.redis;
@@ -56,6 +69,8 @@ export class Janitor {
     this.trips = new TripStore(opts.pool);
     this.log = opts.log ?? pino({ level: 'silent' });
     this.sweepIntervalMs = opts.sweepIntervalMs ?? 1_000;
+    this.reconcileIntervalMs = opts.reconcileIntervalMs ?? 15_000;
+    this.reconcileLimit = opts.reconcileLimit ?? 1_000;
     this.now = opts.now ?? Date.now;
   }
 
@@ -69,11 +84,21 @@ export class Janitor {
         const result = await this.claims.janitorRelease(driverId, this.now());
         if (result.kind === 'live') continue; // renewed view: not actually expired
         if (result.kind === 'gone') {
-          // PX net erased the key (janitor was down past the grace window).
-          // The driver is repaired; the trip row's id went with the value, so
-          // its request revives via the matcher's stale-pending reaper.
+          // The PX net erased the claim key (every sweeper stayed dead past the
+          // grace window). The Lua repaired the driver, but the erased value
+          // took the tripId with it, so the orphaned trip row is still
+          // 'offered' and its request stuck 'matching'. Revert the trip by
+          // driver and re-enqueue the request (the O2 fix — this branch used to
+          // leave both stranded forever).
           this.metrics.janitorGoneTotal++;
-          this.log.warn({ driverId, repaired: result.repaired }, 'claim key gone before sweep');
+          const requestId = await this.trips.janitorRevertByDriver(driverId);
+          if (requestId !== null) {
+            await this.redis.lpush(REQUESTS_QUEUE, requestId);
+            this.metrics.janitorRequeuedTotal++;
+            this.log.warn({ driverId, requestId }, 'claim key gone; reverted orphaned offered trip, re-enqueued');
+          } else {
+            this.log.warn({ driverId, repaired: result.repaired }, 'claim key gone before sweep');
+          }
           continue;
         }
         this.metrics.janitorReleasedTotal++;
@@ -94,22 +119,72 @@ export class Janitor {
     return released;
   }
 
+  /**
+   * Backstop reconciler for the crash sliver where trip_done committed but the
+   * matcher died before freeDriver ran — the driver is left 'on_trip' in Redis
+   * with no active trip. Frees any such driver (freeDriver is a no-op unless it
+   * really is stuck). Returns how many were freed.
+   */
+  async reconcileStuckOnTrip(): Promise<number> {
+    this.metrics.reconcileSweepsTotal++;
+    const candidates = await this.trips.driversWithTerminalTripOnly(this.reconcileLimit);
+    let freed = 0;
+    for (const driverId of candidates) {
+      try {
+        if ((await this.redis.hget(driverKey(driverId), 'status')) !== 'on_trip') continue;
+        if (await this.claims.freeDriver(driverId)) {
+          freed++;
+          this.metrics.stuckDriversFreedTotal++;
+          this.log.warn({ driverId }, 'freed driver stuck on_trip with no active trip');
+        }
+      } catch (err) {
+        this.metrics.sweepErrorsTotal++;
+        this.log.error({ err, driverId }, 'reconcile free failed');
+      }
+    }
+    return freed;
+  }
+
   start(): void {
     if (this.timer !== null) return;
     this.timer = setInterval(() => {
-      this.sweeping = this.sweepOnce().then(
-        () => undefined,
-        (err: unknown) => {
-          this.metrics.sweepErrorsTotal++;
-          this.log.error({ err }, 'janitor sweep failed');
-        },
-      );
+      if (this.sweepRunning) return; // previous sweep still running — skip this tick
+      this.sweepRunning = true;
+      this.sweepInFlight = this.sweepOnce()
+        .then(
+          () => undefined,
+          (err: unknown) => {
+            this.metrics.sweepErrorsTotal++;
+            this.log.error({ err }, 'janitor sweep failed');
+          },
+        )
+        .finally(() => {
+          this.sweepRunning = false;
+        });
     }, this.sweepIntervalMs);
+    this.reconcileTimer = setInterval(() => {
+      if (this.reconcileRunning) return;
+      this.reconcileRunning = true;
+      this.reconcileInFlight = this.reconcileStuckOnTrip()
+        .then(
+          () => undefined,
+          (err: unknown) => {
+            this.metrics.sweepErrorsTotal++;
+            this.log.error({ err }, 'janitor reconcile failed');
+          },
+        )
+        .finally(() => {
+          this.reconcileRunning = false;
+        });
+    }, this.reconcileIntervalMs);
   }
 
   async stop(): Promise<void> {
     if (this.timer !== null) clearInterval(this.timer);
+    if (this.reconcileTimer !== null) clearInterval(this.reconcileTimer);
     this.timer = null;
-    await this.sweeping;
+    this.reconcileTimer = null;
+    await this.sweepInFlight;
+    await this.reconcileInFlight;
   }
 }

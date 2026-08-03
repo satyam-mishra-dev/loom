@@ -82,7 +82,7 @@ describe('E2E lifecycle: simulator + gateway + matcher + janitor', () => {
     `${DRIVERS} seeded drivers: every request reaches a terminal state, every completed trip has a full outbox chain`,
     async () => {
       const port = (gateway.app.server.address() as AddressInfo).port;
-      const url = `ws://127.0.0.1:${port}/ws?token=${signToken('sim', SECRET)}`;
+      const url = `ws://127.0.0.1:${port}/ws?token=${signToken('fleet:sim', SECRET)}`;
       let stderr = '';
       sim = spawn(
         process.execPath,

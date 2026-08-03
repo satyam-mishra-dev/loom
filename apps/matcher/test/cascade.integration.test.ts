@@ -343,4 +343,198 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
     expect(await redis.hget(driverKey('d0'), 'status')).toBe('claimed');
     expect(await redis.exists(claimKey('d0'))).toBe(1);
   });
+
+  it('C1: a 23505 conflict reverts the trip and the cascade matches the next candidate (no strand)', async () => {
+    // d0 is available in Redis but ALREADY holds an active trip in Postgres —
+    // exactly "Redis let a double-claim through". d0 sits on the rider so it is
+    // offered first; d1 is a touch farther, so the cascade falls to it.
+    await geo.applyPings(
+      [
+        { driverId: 'd0', ...CENTER },
+        { driverId: 'd1', lat: CENTER.lat + 0.001, lng: CENTER.lng },
+      ],
+      Date.now(),
+    );
+    // The pre-existing active trip that pins d0 in the partial-unique index.
+    await pool.query(`INSERT INTO ride_requests (id, lat, lng, status) VALUES ('r0', $1, $2, 'matched')`, [
+      CENTER.lat,
+      CENTER.lng,
+    ]);
+    await pool.query(
+      `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token)
+       VALUES ('trip-a', 'r0', 'd0', $1, $2, 'matched', 'tok')`,
+      [CENTER.lat, CENTER.lng],
+    );
+    await insertRequest('r1');
+
+    const core = newCore();
+    expect(await core.matchRequest('r1')).toBe('matched');
+
+    // The 23505 fired exactly once, and the cascade recovered onto d1.
+    expect(core.metrics.pgUniqueViolationsTotal).toBe(1);
+    const trip = await pool.query<{ id: string; driver_id: string; status: string }>(
+      `SELECT id, driver_id, status FROM trips WHERE request_id = 'r1'`,
+    );
+    expect(trip.rows[0]).toMatchObject({ driver_id: 'd1', status: 'en_route' });
+    expect((await pool.query(`SELECT status FROM ride_requests WHERE id = 'r1'`)).rows[0]).toEqual({
+      status: 'matched',
+    });
+
+    // Neither driver stranded: d0 back available (its own trip untouched), d1 on_trip.
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('available');
+    expect(await redis.hget(driverKey('d1'), 'status')).toBe('on_trip');
+    expect((await pool.query(`SELECT status FROM trips WHERE id = 'trip-a'`)).rows[0]).toEqual({
+      status: 'matched',
+    });
+    expect(await redis.keys('claim:*')).toEqual([]);
+    expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
+
+    // The outbox shows the conflict revert (offered→matching) then the re-offer.
+    expect(await eventChain(trip.rows[0]!.id)).toEqual([
+      'requested',
+      'matching',
+      'offered', // d0 offered
+      'matching', // 23505 → reverted
+      'offered', // d1 offered
+      'matched',
+      'en_route',
+    ]);
+  });
+
+  it('C1/O2 backstop: a request stuck matching with an offered trip and no live claim is recovered by the reaper', async () => {
+    await seedDrivers(1);
+    // The residual state: request 'matching' (past the reaper grace), trip
+    // 'offered', but no live claim (the driver was already repaired). Backdate
+    // created_at so the reaper's grace window is satisfied without waiting.
+    await pool.query(
+      `INSERT INTO ride_requests (id, lat, lng, dest_lat, dest_lng, status, created_at)
+       VALUES ('r1', $1, $2, $3, $4, 'matching', now() - interval '60 seconds')`,
+      [CENTER.lat, CENTER.lng, DEST.lat, DEST.lng],
+    );
+    const claims = new ClaimStore(redis);
+    const trips = new TripStore(pool);
+    const token = await claims.claimDriver('d0', 'trip-b', Date.now(), 10_000, 4_000);
+    await trips.offerTrip({
+      tripId: 'trip-b',
+      requestId: 'r1',
+      driverId: 'd0',
+      offerId: 'off-1',
+      claimToken: token!,
+      rider: CENTER,
+    });
+    // Erase the claim and repair the driver by hand — trip stays orphaned 'offered'.
+    await redis.del(claimKey('d0'));
+    await redis.zrem(CLAIMS_BY_EXPIRY, 'd0');
+    await redis.hset(driverKey('d0'), { status: 'available' });
+    await redis.sadd(cellKey(C0), 'd0');
+
+    const core = newCore();
+    expect(await core.recoverProcessing()).toBeGreaterThanOrEqual(1);
+
+    // Reaper reverted the trip and handed the request back, re-enqueued.
+    expect((await pool.query(`SELECT status FROM trips WHERE id = 'trip-b'`)).rows[0]).toEqual({
+      status: 'matching',
+    });
+    expect((await pool.query(`SELECT status FROM ride_requests WHERE id = 'r1'`)).rows[0]).toEqual({
+      status: 'pending',
+    });
+    expect(await redis.lrange(REQUESTS_QUEUE, 0, -1)).toContain('r1');
+
+    // A live matcher finishes the re-cascade on the SAME trip row.
+    expect(await core.matchRequest('r1')).toBe('matched');
+    expect((await pool.query(`SELECT status, driver_id FROM trips WHERE id = 'trip-b'`)).rows[0]).toEqual({
+      status: 'en_route',
+      driver_id: 'd0',
+    });
+  });
+
+  it('O2: janitor gone-branch reverts the orphaned offered trip and re-enqueues (past-grace strand)', async () => {
+    await seedDrivers(1);
+    await insertRequest('r1');
+    const claims = new ClaimStore(redis);
+    const trips = new TripStore(pool);
+    await pool.query(`UPDATE ride_requests SET status = 'matching' WHERE id = 'r1'`);
+    const token = await claims.claimDriver('d0', 'trip-b', Date.now(), 10_000, 500);
+    await trips.offerTrip({
+      tripId: 'trip-b',
+      requestId: 'r1',
+      driverId: 'd0',
+      offerId: 'off-1',
+      claimToken: token!,
+      rider: CENTER,
+    });
+    // Past-grace: the PX net erased the claim VALUE; the ZSET member and the
+    // stuck-'claimed' driver survive — the 'gone' state.
+    await redis.del(claimKey('d0'));
+
+    // Sweep with a clock past the claim's expiry so it is on the janitor's worklist.
+    const janitor = new Janitor({ redis, pool, now: () => Date.now() + 10_000 });
+    await janitor.sweepOnce();
+
+    // The gone branch repaired the driver AND reverted the orphaned trip + re-enqueued.
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('available');
+    expect((await pool.query(`SELECT status FROM trips WHERE id = 'trip-b'`)).rows[0]).toEqual({
+      status: 'matching',
+    });
+    expect((await pool.query(`SELECT status FROM ride_requests WHERE id = 'r1'`)).rows[0]).toEqual({
+      status: 'pending',
+    });
+    expect(await redis.lrange(REQUESTS_QUEUE, 0, -1)).toContain('r1');
+    expect(janitor.metrics.janitorGoneTotal).toBe(1);
+    expect(janitor.metrics.janitorRequeuedTotal).toBe(1);
+  });
+
+  it('C2: two instances, trip_done consumed before arrived_pickup — driver ends freed, trip completed', async () => {
+    // Stage a live en_route trip for d0 (as if just matched), d0 on_trip.
+    await seedDrivers(1);
+    await pool.query(
+      `INSERT INTO ride_requests (id, lat, lng, dest_lat, dest_lng, status) VALUES ('r1', $1, $2, $3, $4, 'matched')`,
+      [CENTER.lat, CENTER.lng, DEST.lat, DEST.lng],
+    );
+    await pool.query(
+      `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token, offer_id)
+       VALUES ('trip-1', 'r1', 'd0', $1, $2, 'en_route', 'tok', 'off-1')`,
+      [CENTER.lat, CENTER.lng],
+    );
+    await redis.hset(driverKey('d0'), { status: 'on_trip' });
+    await redis.srem(cellKey(C0), 'd0');
+
+    // Two matcher instances sharing the stores — two trip-progress consumers.
+    const redisB = new Redis(redisContainer.getConnectionUrl());
+    const poolB = createPool(pgContainer.getConnectionUri());
+    const a = new MatcherCore({ redis, pool });
+    const b = new MatcherCore({ redis: redisB, pool: poolB });
+    try {
+      await a.start(1);
+      await b.start(1);
+
+      // Force the reorder: trip_done lands FIRST, while the trip is still en_route.
+      await redis.lpush(TRIP_EVENTS_QUEUE, JSON.stringify({ tripId: 'trip-1', driverId: 'd0', event: 'trip_done' }));
+      await waitFor(() => a.metrics.tripEventPrematureTotal + b.metrics.tripEventPrematureTotal >= 1);
+
+      // Now the predecessor arrives; the requeued trip_done retries and applies.
+      await redis.lpush(
+        TRIP_EVENTS_QUEUE,
+        JSON.stringify({ tripId: 'trip-1', driverId: 'd0', event: 'arrived_pickup' }),
+      );
+
+      await waitFor(
+        async () => (await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]?.status === 'completed',
+      );
+      await waitFor(async () => (await redis.hget(driverKey('d0'), 'status')) === 'available');
+
+      // The trip completed and the driver is back in its cell — nothing stranded.
+      // (The trip was staged directly at en_route, so the outbox records only
+      // the two progress hops applied here.)
+      expect(await redis.smembers(cellKey(C0))).toEqual(['d0']);
+      const chain = await eventChain('trip-1');
+      expect(chain.slice(-2)).toEqual(['in_trip', 'completed']);
+      expect(a.metrics.tripEventPrematureTotal + b.metrics.tripEventPrematureTotal).toBeGreaterThanOrEqual(1);
+    } finally {
+      await a.stop();
+      await b.stop();
+      await poolB.end();
+      redisB.disconnect();
+    }
+  });
 });

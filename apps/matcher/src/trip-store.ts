@@ -19,6 +19,17 @@ import {
 
 export type AcceptResult = 'matched' | 'conflict' | 'lost';
 
+/**
+ * Outcome of a driver-reported milestone (progress):
+ *  - 'applied'   the transition was legal and committed;
+ *  - 'premature' a predecessor event has not landed yet (cross-instance
+ *                reorder) — the caller must re-queue, NOT drop, and retry once
+ *                the predecessor commits;
+ *  - 'terminal'  a duplicate, late, spoofed, or genuinely-illegal event that can
+ *                never become legal — drop it.
+ */
+export type ProgressOutcome = 'applied' | 'premature' | 'terminal';
+
 interface TripRow {
   id: string;
   status: string;
@@ -26,6 +37,23 @@ interface TripRow {
   offer_id: string | null;
   request_id: string;
 }
+
+/**
+ * Linear position of a trip status along matching→…→completed. Used to tell a
+ * PREMATURE progress event (current status earlier than the transition's
+ * required source — its predecessor is still in flight) from a TERMINAL one
+ * (current status at or past a terminal — a duplicate/late event). cancelled is
+ * terminal, so it sits past completed.
+ */
+const TRIP_STATUS_ORDER: Record<string, number> = {
+  matching: 0,
+  offered: 1,
+  matched: 2,
+  en_route: 3,
+  in_trip: 4,
+  completed: 5,
+  cancelled: 6,
+};
 
 /** Rehydrate the machine state from a trips row. */
 function rowState(row: TripRow): TripState {
@@ -251,16 +279,31 @@ export class TripStore {
     });
   }
 
-  /** Driver-reported milestones: en_route → in_trip → completed, driver-checked. */
-  async progress(tripId: string, driverId: string, event: 'arrived_pickup' | 'trip_done'): Promise<boolean> {
-    const machineEvent: TripEvent =
-      event === 'arrived_pickup' ? { type: 'ARRIVED_PICKUP' } : { type: 'TRIP_DONE' };
-    return this.applyGuarded(
-      tripId,
-      machineEvent,
-      (row) => ({ event: machineEvent.type, driverId: row.driver_id }),
-      driverId,
-    );
+  /**
+   * Driver-reported milestones: en_route → in_trip → completed, driver-checked.
+   * Distinguishes a PREMATURE event (its predecessor has not committed yet —
+   * possible when two matcher instances split the trip-progress consumer and
+   * consume trip_done before arrived_pickup) from a TERMINAL one (duplicate,
+   * late, spoofed, or illegal). The caller retries premature events; a dropped
+   * one would strand the trip 'in_trip' and the driver 'on_trip' forever.
+   */
+  async progress(tripId: string, driverId: string, event: 'arrived_pickup' | 'trip_done'): Promise<ProgressOutcome> {
+    return this.inTx(async (client) => {
+      const row = await this.lockTrip(client, tripId);
+      if (row === null) return 'terminal'; // no such trip — nothing to retry
+      if (row.driver_id !== driverId) return 'terminal'; // spoof / wrong driver — drop
+      const required = event === 'arrived_pickup' ? 'en_route' : 'in_trip';
+      const delta = (TRIP_STATUS_ORDER[row.status] ?? Number.NaN) - TRIP_STATUS_ORDER[required]!;
+      if (Number.isNaN(delta)) return 'terminal'; // unknown status — drop, don't spin
+      if (delta < 0) return 'premature'; // a predecessor event has not landed yet
+      if (delta > 0) return 'terminal'; // duplicate / late / terminal — drop
+      const machineEvent: TripEvent =
+        event === 'arrived_pickup' ? { type: 'ARRIVED_PICKUP' } : { type: 'TRIP_DONE' };
+      const next = transition(rowState(row), machineEvent);
+      await client.query('UPDATE trips SET status = $2 WHERE id = $1', [tripId, next.status]);
+      await this.insertEvent(client, tripId, next.status, { event: machineEvent.type, driverId: row.driver_id });
+      return 'applied';
+    });
   }
 
   /**
@@ -303,18 +346,57 @@ export class TripStore {
     });
   }
 
+  /**
+   * The PX net erased the claim value before the janitor read it, so the
+   * janitor holds only the driverId, not the tripId. Find that driver's
+   * orphaned 'offered' trip and revert it the same way janitorRevert does. The
+   * claim key being gone means there is no live claim for this driver, so any
+   * 'offered' trip of theirs is stranded and safe to revert. (ponytail: the
+   * theoretical race where a matcher re-claims the driver and creates a NEW
+   * offered row in the microseconds before this query is collapsed by the
+   * cascade's own guards — it gets a 'lost' and self-heals.) Returns the
+   * requestId to re-enqueue, or null if there is nothing to recover.
+   */
+  async janitorRevertByDriver(driverId: string): Promise<string | null> {
+    const res = await this.pool.query<{ id: string }>(
+      `SELECT id FROM trips WHERE driver_id = $1 AND status = 'offered'`,
+      [driverId],
+    );
+    const tripId = res.rows[0]?.id;
+    if (tripId === undefined) return null;
+    return this.janitorRevert(tripId);
+  }
+
+  /**
+   * Backstop reconciler for the crash sliver where trip_done committed but
+   * freeDriver never ran (the matcher died between the two): the driver is left
+   * 'on_trip' in Redis with no active trip. Returns driverIds whose latest trip
+   * is terminal and who therefore should be freed if still marked on_trip in
+   * Redis — the caller does the Redis check + freeDriver (a no-op unless the
+   * driver really is stuck). ponytail: scans completed trips with a LIMIT; a
+   * completion watermark/index is the upgrade path if this ever gets hot.
+   */
+  async driversWithTerminalTripOnly(limit: number): Promise<string[]> {
+    const res = await this.pool.query<{ driver_id: string }>(
+      `SELECT DISTINCT driver_id FROM trips
+       WHERE status = 'completed'
+         AND driver_id NOT IN (SELECT driver_id FROM trips WHERE status IN ('matched', 'en_route', 'in_trip'))
+       LIMIT $1`,
+      [limit],
+    );
+    return res.rows.map((r) => r.driver_id);
+  }
+
   /** Shared guarded single-edge apply: lock, machine-check, write status + outbox. */
   private async applyGuarded(
     tripId: string,
     event: TripEvent,
     payload: (row: TripRow) => Record<string, unknown>,
-    requireDriverId?: string,
   ): Promise<boolean> {
     try {
       return await this.inTx(async (client) => {
         const row = await this.lockTrip(client, tripId);
         if (row === null) return false;
-        if (requireDriverId !== undefined && row.driver_id !== requireDriverId) return false;
         const next = transition(rowState(row), event);
         await client.query('UPDATE trips SET status = $2 WHERE id = $1', [tripId, next.status]);
         await this.insertEvent(client, tripId, next.status, payload(row));
