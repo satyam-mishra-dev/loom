@@ -117,8 +117,12 @@ return 1
 
 // KEYS[1] claim:{id}  KEYS[2] driver:{id}
 // ARGV[1] driverId  ARGV[2] token
-// Token must match; the driver returns to the available set of its CURRENT
-// cell (the hash — the driver kept pinging position while claimed).
+// Token must match; the claim is deleted and de-indexed. The driver returns to
+// the available set of its CURRENT cell ONLY if it is still 'claimed' (mirrors
+// JANITOR_LUA): a driver swept 'offline' for silence, or already 'on_trip',
+// must NOT be resurrected into an available set by a late offer-timeout release
+// — that would leave it in the cell set but off the heartbeat ZSET, a zombie
+// the stale sweep can never reap.
 const RELEASE_LUA = `
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
@@ -126,9 +130,12 @@ local claim = cjson.decode(raw)
 if claim.token ~= ARGV[2] then return 0 end
 redis.call('DEL', KEYS[1])
 redis.call('ZREM', 'claims:by-expiry', ARGV[1])
-redis.call('HSET', KEYS[2], 'status', 'available')
-local cell = redis.call('HGET', KEYS[2], 'cell')
-if cell then redis.call('SADD', 'cell:' .. cell .. ':available', ARGV[1]) end
+local status = redis.call('HGET', KEYS[2], 'status')
+if status == 'claimed' then
+  redis.call('HSET', KEYS[2], 'status', 'available')
+  local cell = redis.call('HGET', KEYS[2], 'cell')
+  if cell then redis.call('SADD', 'cell:' .. cell .. ':available', ARGV[1]) end
+end
 return 1
 `;
 

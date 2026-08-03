@@ -164,6 +164,23 @@ describe('atomic claim (testcontainers redis)', () => {
     expect(await claims.claimDriver('mover', 'trip-2', T0 + 1000, FRESH_MS, TTL_MS)).not.toBeNull();
   });
 
+  it('release does NOT resurrect an offline (silence-swept) driver into an available set', async () => {
+    await seed('quiet');
+    const token = (await claims.claimDriver('quiet', 'trip-1', T0, FRESH_MS, TTL_MS))!;
+    // The gateway sweep declared it dead while claimed (silent driver).
+    await index.sweepStale(T0 + FRESH_MS + 1, FRESH_MS);
+    expect(await redis.hget(driverKey('quiet'), 'status')).toBe('offline');
+
+    // A late offer-timeout release consumes the claim but must NOT re-add the
+    // offline driver to a cell set — that would leave it in the set yet off the
+    // heartbeat ZSET, a zombie the stale sweep can never reap (C3).
+    expect(await claims.releaseClaim('quiet', token)).toBe(true);
+    expect(await redis.hget(driverKey('quiet'), 'status')).toBe('offline');
+    expect(await redis.smembers(cellKey(C0))).toEqual([]);
+    expect(await redis.exists(claimKey('quiet'))).toBe(0);
+    expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
+  });
+
   it('release with a wrong or stale token is a no-op', async () => {
     await seed('d1');
     const token = (await claims.claimDriver('d1', 'trip-1', T0, FRESH_MS, TTL_MS))!;
