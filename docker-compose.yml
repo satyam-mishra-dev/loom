@@ -1,3 +1,8 @@
+# The whole Fleetline stack, one command: `docker compose up -d --wait`.
+# Host ports: Postgres 5434, Redis 6381, dashboard 4620, SSE/read-model 4600,
+# gateway 4640, matcher 4650 (all clear of the usual 5432/6379/3000/4000 and
+# Tally's 48xx). Dependency order and healthchecks let --wait block until the
+# stack is actually serving.
 services:
   postgres:
     image: postgres:16-alpine
@@ -14,6 +19,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -26,6 +32,141 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  # One-shot: apply migrations, then exit 0. Everything that touches Postgres
+  # waits for this to complete.
+  migrate:
+    build:
+      context: .
+      target: app
+    command: npm run migrate --workspace=@fleetline/db
+    environment:
+      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  gateway:
+    build:
+      context: .
+      target: app
+    command: npm run start --workspace=@fleetline/gateway
+    environment:
+      PORT: '8080'
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
+      GATEWAY_SECRET: ${GATEWAY_SECRET:-fleetline-dev-secret}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-200}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-400}
+    ports:
+      - '4640:8080'
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # Matcher embeds the janitor (same sweep loop; janitor-main.ts runs it alone
+  # if you want a separate process).
+  matcher:
+    build:
+      context: .
+      target: app
+    command: npm run start --workspace=@fleetline/matcher
+    environment:
+      PORT: '8090'
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
+      MATCHER_CONSUMERS: ${MATCHER_CONSUMERS:-8}
+    ports:
+      - '4650:8090'
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:8090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # CQRS read side: surge recompute + SSE snapshot fan-out + /spawn control.
+  read-model:
+    build:
+      context: .
+      target: app
+    command: npm run start --workspace=@fleetline/read-model
+    environment:
+      PORT: '4600'
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
+      MATCHER_METRICS_URL: http://matcher:8090/metrics
+      CENTER_LAT: '37.7749'
+      CENTER_LNG: '-122.4194'
+    ports:
+      - '4600:4600'
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      matcher:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:4600/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # The demo fleet + request generator. Mints its own gateway token. Tune the
+  # fleet with SIM_DRIVERS / SIM_RPS / SIM_HOTSPOTS (defaults keep a laptop happy;
+  # bump SIM_DRIVERS to 5000 for the headline demo).
+  simulator:
+    build:
+      context: .
+      target: app
+    command: >
+      npm run start --workspace=@fleetline/simulator --
+      --sink ws --gateway ws://gateway:8080/ws --auth-secret ${GATEWAY_SECRET:-fleetline-dev-secret}
+      --drivers ${SIM_DRIVERS:-2000} --rps ${SIM_RPS:-20} --hotspots ${SIM_HOTSPOTS:-3}
+      --seed 42 --speedup 1 --accept-prob 0.85
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      target: dashboard
+      args:
+        VITE_READMODEL_URL: ${VITE_READMODEL_URL:-http://localhost:4600}
+    ports:
+      - '4620:4620'
+    depends_on:
+      read-model:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:4620/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
 
 volumes:
   pgdata:
