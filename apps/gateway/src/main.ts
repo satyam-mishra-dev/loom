@@ -2,7 +2,17 @@ import { Redis } from 'ioredis';
 import { createPool } from '@fleetline/db';
 import { buildGateway } from './server.js';
 
-const port = Number(process.env['PORT'] ?? 8080);
+// Validate numeric env up front: a raw Number(env) that yields NaN would
+// silently corrupt the port or the limiter (and NaN into any interval spins).
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got "${raw}"`);
+  return n;
+}
+
+const port = envInt('PORT', 8080);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl =
   process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
@@ -18,9 +28,9 @@ const { app } = buildGateway({
   pool,
   logger: true,
   rateLimit: {
-    limit: Number(process.env['RATE_LIMIT_RPS'] ?? 200),
-    windowMs: Number(process.env['RATE_LIMIT_WINDOW_MS'] ?? 1_000),
-    burst: Number(process.env['RATE_LIMIT_BURST'] ?? 400),
+    limit: envInt('RATE_LIMIT_RPS', 200),
+    windowMs: envInt('RATE_LIMIT_WINDOW_MS', 1_000),
+    burst: envInt('RATE_LIMIT_BURST', 400),
     failClosed: process.env['RATE_LIMIT_FAIL_CLOSED'] === 'true',
   },
 });

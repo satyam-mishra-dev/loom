@@ -132,7 +132,8 @@ describe('gateway (testcontainers redis, real sockets)', () => {
 
   it('pings land in the index; the socket registry tracks multiplexed drivers', async () => {
     const { gw, port } = await startGateway();
-    const ws = await connect(port, signToken('sim', SECRET));
+    // A fleet principal authorizes the whole driver namespace over one socket.
+    const ws = await connect(port, signToken('fleet:sim', SECRET));
     ping(ws, 'd1');
     ping(ws, 'd2');
     ping(ws, 'd3');
@@ -143,10 +144,33 @@ describe('gateway (testcontainers redis, real sockets)', () => {
     expect(await redis.hget(driverKey('d1'), 'status')).toBe('available');
 
     // Registry: token principal + every driver seen on the socket.
-    expect([...gw.driverSockets.keys()].sort()).toEqual(['d1', 'd2', 'd3', 'sim']);
+    expect([...gw.driverSockets.keys()].sort()).toEqual(['d1', 'd2', 'd3', 'fleet:sim']);
     ws.close();
     await waitFor(() => gw.driverSockets.size === 0);
     expect(gw.metrics.wsConnectionsActive).toBe(0);
+  });
+
+  it('G1/G4: a driver-scoped token cannot act for another driver (ping/reply/trip_progress rejected)', async () => {
+    const { gw, port } = await startGateway();
+    const ws = await connect(port, signToken('d1', SECRET));
+
+    // In scope: a ping for its own id is accepted and indexed.
+    ping(ws, 'd1');
+    await waitFor(async () => (await redis.hget(driverKey('d1'), 'status')) === 'available');
+
+    // Out of scope: pinging, replying, or reporting progress for a DIFFERENT
+    // driver over the same socket is rejected — no channel hijack, no offer theft.
+    ping(ws, 'victim');
+    ws.send(JSON.stringify({ type: 'offer_reply', offerId: 'o1', driverId: 'victim', accept: true }));
+    ws.send(JSON.stringify({ type: 'trip_progress', tripId: 't1', driverId: 'victim', event: 'arrived_pickup' }));
+
+    await waitFor(() => gw.metrics.scopeRejectsTotal === 3);
+    expect(gw.driverSockets.has('victim')).toBe(false);
+    expect(await redis.exists(driverKey('victim'))).toBe(0);
+    expect(await redis.exists(offerReplyKey('o1'))).toBe(0);
+    expect(await redis.llen(TRIP_EVENTS_QUEUE)).toBe(0);
+    expect(gw.metrics.offerRepliesTotal).toBe(0);
+    expect(gw.metrics.tripProgressTotal).toBe(0);
   });
 
   it('counts invalid payloads without crashing, and ride_requests separately', async () => {
@@ -165,7 +189,7 @@ describe('gateway (testcontainers redis, real sockets)', () => {
 
   it('flushes on FLUSH_MAX without waiting for the timer', async () => {
     const { gw, port } = await startGateway({ flushMs: 60_000, flushMax: 10 });
-    const ws = await connect(port, signToken('sim', SECRET));
+    const ws = await connect(port, signToken('fleet:sim', SECRET));
     for (let i = 0; i < 10; i++) ping(ws, `m${i}`);
 
     // The 60s timer cannot have fired — only the size trigger explains this.
@@ -236,7 +260,7 @@ describe('gateway (testcontainers redis, real sockets)', () => {
 
     it('subscribes for drivers learned from pings on a multiplexed socket', async () => {
       const { gw, port } = await startGateway();
-      const ws = await connect(port, signToken('sim', SECRET));
+      const ws = await connect(port, signToken('fleet:sim', SECRET));
       const inbox: string[] = [];
       ws.on('message', (data: Buffer) => inbox.push(String(data)));
       ping(ws, 'd7');
@@ -385,7 +409,7 @@ describe('gateway (testcontainers redis, real sockets)', () => {
     const drivers = 300;
     const ticks = 4;
     const root = fileURLToPath(new URL('../../..', import.meta.url));
-    const url = `ws://127.0.0.1:${port}/ws?token=${signToken('sim', SECRET)}`;
+    const url = `ws://127.0.0.1:${port}/ws?token=${signToken('fleet:sim', SECRET)}`;
 
     const sim = spawn(
       join(root, 'node_modules', '.bin', 'tsx'),

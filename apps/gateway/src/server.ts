@@ -41,6 +41,8 @@ export interface GatewayOptions {
   pongTimeoutMs?: number;
   /** Per-socket outbound queue bound in BYTES; overflow ⇒ disconnect (default 1 MiB). */
   maxQueueBytes?: number;
+  /** Max inbound WS frame in BYTES (ws default is 100 MiB); our messages are tiny (default 16 KiB). */
+  maxPayloadBytes?: number;
   /** How often the stale-driver sweep runs (default 2s). */
   sweepIntervalMs?: number;
   /** App-level heartbeat staleness threshold (default 10s). */
@@ -94,8 +96,16 @@ type InboundMessage =
   | { kind: 'offer_reply'; offerId: string; driverId: string; accept: boolean }
   | { kind: 'trip_progress'; tripId: string; driverId: string; event: 'arrived_pickup' | 'trip_done' };
 
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
+// Coordinate guards at the trust boundary: finiteness is NOT enough. h3-js's
+// latLngToCell silently WRAPS an out-of-range coordinate into a valid cell
+// (latLngToCell(1000, 5000, 8) returns a real cell), which would teleport a
+// driver to the wrong cell or attribute a request's surge to the wrong place.
+// Reject anything outside real lat[-90,90] / lng[-180,180].
+function isLat(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= -90 && v <= 90;
+}
+function isLng(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= -180 && v <= 180;
 }
 
 function nonEmptyString(v: unknown): v is string {
@@ -110,17 +120,17 @@ function parseMessage(raw: unknown): InboundMessage | null {
     case 'driver_ping': {
       const driverId = msg['driverId'];
       const { lat, lng } = msg;
-      if (!nonEmptyString(driverId) || !isFiniteNumber(lat) || !isFiniteNumber(lng)) return null;
+      if (!nonEmptyString(driverId) || !isLat(lat) || !isLng(lng)) return null;
       return { kind: 'ping', ping: { driverId, lat, lng } };
     }
     case 'ride_request': {
       const requestId = msg['requestId'];
       const { lat, lng } = msg;
-      if (!nonEmptyString(requestId) || !isFiniteNumber(lat) || !isFiniteNumber(lng)) return null;
-      // Destination is optional on the wire; a missing one degenerates to a
-      // zero-length trip rather than rejecting the request.
-      const destLat = isFiniteNumber(msg['destLat']) ? msg['destLat'] : null;
-      const destLng = isFiniteNumber(msg['destLng']) ? msg['destLng'] : null;
+      if (!nonEmptyString(requestId) || !isLat(lat) || !isLng(lng)) return null;
+      // Destination is optional on the wire; a missing OR out-of-range one
+      // degenerates to a zero-length trip rather than rejecting the request.
+      const destLat = isLat(msg['destLat']) ? msg['destLat'] : null;
+      const destLng = isLng(msg['destLng']) ? msg['destLng'] : null;
       return { kind: 'ride_request', requestId, lat, lng, destLat, destLng };
     }
     case 'offer_reply': {
@@ -155,6 +165,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     pingIntervalMs = 25_000,
     pongTimeoutMs = 8_000,
     maxQueueBytes = 1024 * 1024,
+    maxPayloadBytes = 16 * 1024,
     sweepIntervalMs = 2_000,
     staleMs = 10_000,
     rateLimit,
@@ -375,7 +386,10 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     queueSubOp(() => sub.unsubscribe(driverChannel(driverId)), driverId);
   }
 
-  const wss = new WebSocketServer({ noServer: true });
+  // maxPayload caps inbound frames far below ws's 100 MiB default: every message
+  // we accept (ping, ride_request, offer_reply, trip_progress) is well under a
+  // KiB, so a few KiB is generous and a giant frame is rejected, not allocated.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: maxPayloadBytes });
 
   wss.on('connection', (socket, req: IncomingMessage) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -388,6 +402,19 @@ export function buildGateway(opts: GatewayOptions): Gateway {
 
     metrics.wsConnectionsTotal++;
     metrics.wsConnectionsActive++;
+
+    // Driver-identity scope (G1/G4). A token authorizes a PRINCIPAL; the
+    // driverId inside a ping/reply/trip_progress is payload-controlled, so it
+    // must be checked against what the principal is allowed to act for:
+    //   - a FLEET principal (id prefixed `fleet:`) authorizes its whole driver
+    //     namespace — this is the simulator's one-socket-many-drivers design and
+    //     models a real dispatch edge aggregating a fleet's GPS (see
+    //     FAILURE-MODES.md / DECISIONS.md for the trust model);
+    //   - any other (per-driver) principal may act ONLY for its own id.
+    // Without this check a valid token could hijack ANY driver's channel and
+    // steal its offers/PII. Per-device driver auth is the production upgrade.
+    const isFleet = principal.startsWith('fleet:');
+    const inScope = (driverId: string): boolean => isFleet || driverId === principal;
 
     const boundIds = new Set<string>([principal]);
     bindDriver(principal, socket);
@@ -435,14 +462,29 @@ export function buildGateway(opts: GatewayOptions): Gateway {
         return;
       }
       if (msg.kind === 'offer_reply') {
+        // G4: only accept a reply for a driver this principal is scoped for —
+        // otherwise a valid token could accept/decline another driver's offer.
+        if (!inScope(msg.driverId)) {
+          metrics.scopeRejectsTotal++;
+          return;
+        }
         void forwardOfferReply(msg.offerId, msg.accept);
         return;
       }
       if (msg.kind === 'trip_progress') {
+        if (!inScope(msg.driverId)) {
+          metrics.scopeRejectsTotal++;
+          return;
+        }
         void forwardTripProgress(msg.tripId, msg.driverId, msg.event);
         return;
       }
       metrics.pingsReceivedTotal++;
+      // G1: a ping's driverId is payload-controlled — bind/enqueue only within scope.
+      if (!inScope(msg.ping.driverId)) {
+        metrics.scopeRejectsTotal++;
+        return;
+      }
       if (!boundIds.has(msg.ping.driverId)) {
         boundIds.add(msg.ping.driverId);
         bindDriver(msg.ping.driverId, socket);

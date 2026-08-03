@@ -12,6 +12,8 @@ export interface GatewayMetrics {
   rideRequestErrorsTotal: number;
   invalidMessagesTotal: number;
   authRejectsTotal: number;
+  /** Pings/replies/trip-progress rejected because their driverId was outside the principal's scope (G1/G4). */
+  scopeRejectsTotal: number;
   pongTimeoutsTotal: number;
   backpressureDisconnectsTotal: number;
   batchesFlushedTotal: number;
@@ -40,6 +42,7 @@ export function createMetrics(): GatewayMetrics {
     rideRequestErrorsTotal: 0,
     invalidMessagesTotal: 0,
     authRejectsTotal: 0,
+    scopeRejectsTotal: 0,
     pongTimeoutsTotal: 0,
     backpressureDisconnectsTotal: 0,
     batchesFlushedTotal: 0,
@@ -67,6 +70,7 @@ export function renderMetrics(m: GatewayMetrics, limiter?: LimiterMetrics): stri
     ...renderCounter('ride_request_errors_total', m.rideRequestErrorsTotal),
     ...renderCounter('invalid_messages_total', m.invalidMessagesTotal),
     ...renderCounter('auth_rejects_total', m.authRejectsTotal),
+    ...renderCounter('scope_rejects_total', m.scopeRejectsTotal),
     ...renderCounter('pong_timeouts_total', m.pongTimeoutsTotal),
     ...renderCounter('backpressure_disconnects_total', m.backpressureDisconnectsTotal),
     ...renderCounter('ping_batches_flushed_total', m.batchesFlushedTotal),

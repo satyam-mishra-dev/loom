@@ -23,7 +23,11 @@ const { values } = parseArgs({
     // When set, the sim mints its own gateway token (same HMAC scheme as
     // apps/gateway/src/auth.ts) so `docker compose up` needs no pre-signed URL.
     'auth-secret': { type: 'string', default: '' },
-    principal: { type: 'string', default: 'sim' },
+    // A `fleet:`-prefixed principal authorizes the WHOLE driver namespace over
+    // one socket (the sim's one-socket-many-drivers design; see the gateway's
+    // G1 scope check + FAILURE-MODES.md). A bare driverId here would only be
+    // allowed to ping for itself.
+    principal: { type: 'string', default: 'fleet:sim' },
   },
 });
 
