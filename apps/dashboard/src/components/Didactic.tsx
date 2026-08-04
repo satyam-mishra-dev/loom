@@ -71,7 +71,7 @@ export const TOPICS: Record<string, DidacticTopic> = {
 };
 
 function archHref(anchor: string): string | null {
-  return REPO_URL === '' ? null : `${REPO_URL}/ARCHITECTURE.md#${anchor}`;
+  return REPO_URL === '' ? null : `${REPO_URL}/docs/ARCHITECTURE.md#${anchor}`;
 }
 function testHref(path: string): string | null {
   return REPO_URL === '' ? null : `${REPO_URL}/${path}`;
@@ -100,7 +100,7 @@ export function Didactic({ topic }: { topic: keyof typeof TOPICS }): ReactElemen
         <LinkOrPath
           label="architecture"
           href={arch}
-          text={`ARCHITECTURE.md § ${t.archAnchor.replace(/-/g, ' ')}`}
+          text={`docs/ARCHITECTURE.md § ${t.archAnchor.replace(/-/g, ' ')}`}
         />
         <LinkOrPath label="test" href={test} text={t.testPath} />
       </div>

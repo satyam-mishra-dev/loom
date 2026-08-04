@@ -58,8 +58,8 @@ buffered rather than dropped, and the block's deadline _is_ the offer TTL.
 ## Guarantees
 
 Every number below is reproduced by a committed script or test — nothing here is
-hand-waved. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how each is enforced and
-[`FAILURE-MODES.md`](FAILURE-MODES.md) for what breaks and how it recovers.
+hand-waved. See [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how each is enforced and
+[`FAILURE-MODES.md`](docs/FAILURE-MODES.md) for what breaks and how it recovers.
 
 **No driver is ever double-assigned.** The signature test
 ([`test/no-double-assignment.test.ts`](test/no-double-assignment.test.ts)) seeds
@@ -99,7 +99,7 @@ fixed 5,000-driver fleet — not a saturation point: it does not push RPS past t
 fleet's capacity to find the knee (throughput stays matched to demand,
 `unmatched 0%`, across all four levels). Finding where it first breaks is a
 deliberate next experiment, not a hidden result. The table above was captured on
-a quiet box; [`PERFORMANCE.md`](PERFORMANCE.md) profiles where that latency goes
+a quiet box; [`PERFORMANCE.md`](docs/PERFORMANCE.md) profiles where that latency goes
 (~90% is queue wait, not match logic), records a controlled before/after
 optimization pass under heavier co-resident load, and is honest about what did
 _not_ help (adding consumers).
@@ -199,7 +199,7 @@ index into the same Redis that already holds the claim keys, offer reply lists,
 and surge windows means the atomic claim and the index membership live in one
 store — one round trip, one failure domain, one `FLUSHALL`-and-heal story. If I
 needed "notify me when any driver enters the airport polygon," Tile38 would earn
-its place. ([DECISIONS.md](DECISIONS.md) records the res-8 choice and the
+its place. ([DECISIONS.md](docs/DECISIONS.md) records the res-8 choice and the
 rejected alternatives in full.)
 
 ---
