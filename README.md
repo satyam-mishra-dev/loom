@@ -97,7 +97,11 @@ This sweep shows the **queuing slope** — latency rising with offered load on a
 fixed 5,000-driver fleet — not a saturation point: it does not push RPS past the
 fleet's capacity to find the knee (throughput stays matched to demand,
 `unmatched 0%`, across all four levels). Finding where it first breaks is a
-deliberate next experiment, not a hidden result.
+deliberate next experiment, not a hidden result. The table above was captured on
+a quiet box; [`PERFORMANCE.md`](PERFORMANCE.md) profiles where that latency goes
+(~90% is queue wait, not match logic), records a controlled before/after
+optimization pass under heavier co-resident load, and is honest about what did
+*not* help (adding consumers).
 
 Geo candidate search (k-ring expand, `need=8`, `maxK=3`) over the indexed fleet:
 **p50 0.59 ms, p99 2.82 ms** across 500 searches (query points now seeded, so the
