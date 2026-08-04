@@ -115,14 +115,20 @@ export class MatcherCore {
    */
   async matchRequest(requestId: string): Promise<MatchOutcome> {
     const started = performance.now();
+    // Claim the request (pending→matching guard) AND resolve any pre-crash
+    // trip row for resume in ONE round trip: the correlated subquery reads the
+    // (unmodified) trips table in the same statement, saving a separate SELECT
+    // on every request. NULL existing_trip_id ⇒ fresh cascade.
     const claimed = await this.pool.query<{
       lat: number;
       lng: number;
       dest_lat: number | null;
       dest_lng: number | null;
+      existing_trip_id: string | null;
     }>(
       `UPDATE ride_requests SET status = 'matching' WHERE id = $1 AND status = 'pending'
-       RETURNING lat, lng, dest_lat, dest_lng`,
+       RETURNING lat, lng, dest_lat, dest_lng,
+         (SELECT id FROM trips WHERE request_id = $1) AS existing_trip_id`,
       [requestId],
     );
     const row = claimed.rows[0];
@@ -133,12 +139,7 @@ export class MatcherCore {
     }
     const rider = { lat: row.lat, lng: row.lng };
     const dest = { lat: row.dest_lat ?? row.lat, lng: row.dest_lng ?? row.lng };
-
-    // Resume support: a pre-crash cascade may already own a trip row.
-    const existing = await this.pool.query<{ id: string }>('SELECT id FROM trips WHERE request_id = $1', [
-      requestId,
-    ]);
-    const tripId = existing.rows[0]?.id ?? randomUUID();
+    const tripId = row.existing_trip_id ?? randomUUID();
 
     const { candidates } = await this.geoIndex.findCandidates(rider.lat, rider.lng, {
       need: this.need,

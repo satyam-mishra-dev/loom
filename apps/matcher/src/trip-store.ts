@@ -152,13 +152,19 @@ export class TripStore {
               args.offerId,
             ],
           );
-          await this.insertEvent(client, args.tripId, 'requested', { requestId: args.requestId });
-          await this.insertEvent(client, args.tripId, 'matching', { event: 'MATCHING_STARTED' });
-          await this.insertEvent(client, args.tripId, 'offered', {
-            event: 'OFFER_SENT',
-            driverId: args.driverId,
-            offerId: args.offerId,
-          });
+          // One multi-row INSERT for the birth provenance (requested→matching→
+          // offered): same rows, same TX, same order (IDENTITY assigns ids in
+          // VALUES order, preserving the outbox chain) — three round trips
+          // collapsed into one on the hottest cascade path.
+          await client.query(
+            `INSERT INTO trip_events (trip_id, type, payload) VALUES ($1,'requested',$2),($1,'matching',$3),($1,'offered',$4)`,
+            [
+              args.tripId,
+              JSON.stringify({ requestId: args.requestId }),
+              JSON.stringify({ event: 'MATCHING_STARTED' }),
+              JSON.stringify({ event: 'OFFER_SENT', driverId: args.driverId, offerId: args.offerId }),
+            ],
+          );
           return true;
         }
         const next = transition(rowState(row), {
