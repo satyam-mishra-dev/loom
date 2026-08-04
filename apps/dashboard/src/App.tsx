@@ -1,220 +1,181 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { CSSProperties, ReactElement } from 'react';
-import DeckGL from '@deck.gl/react';
-import { ArcLayer, ScatterplotLayer } from '@deck.gl/layers';
-import { H3HexagonLayer } from '@deck.gl/geo-layers';
-import type { Layer } from '@deck.gl/core';
-import type { DriverDot, Snapshot, SurgeCell, TripArc } from './types.js';
+import { Layers as LayersIcon } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactElement } from 'react';
+import { toast } from 'sonner';
+import { COMMIT_SHA, crashMatcher, readUrl, runProof, spawnRequests } from './api.js';
+import type { Snapshot } from './types.js';
+import { BottomDock } from './components/BottomDock.js';
+import { CrashDialog, type CrashState } from './components/CrashDialog.js';
+import { FirstVisitOverlay } from './components/FirstVisitOverlay.js';
+import { FleetMap } from './components/FleetMap.js';
+import { Hud, type Series } from './components/Hud.js';
+import { LayerToggles, type LayerState } from './components/LayerToggles.js';
+import { ProofOverlay, type ProofState } from './components/ProofOverlay.js';
+import { TripInspector } from './components/TripInspector.js';
+import { Card } from './components/ui/base.js';
+import { Popover } from './components/ui/popover.js';
 
-const READMODEL_URL = (import.meta.env['VITE_READMODEL_URL'] as string | undefined) ?? 'http://localhost:4600';
-// Demo-grade shared token for the read model's /events + /spawn (baked at build
-// time). Empty = the read model is running open (bare local dev).
-const READMODEL_TOKEN = (import.meta.env['VITE_READMODEL_TOKEN'] as string | undefined) ?? '';
-const readUrl = (path: string): string =>
-  READMODEL_TOKEN === '' ? `${READMODEL_URL}${path}` : `${READMODEL_URL}${path}?token=${encodeURIComponent(READMODEL_TOKEN)}`;
-const CENTER = {
-  lat: Number(import.meta.env['VITE_CENTER_LAT'] ?? 37.7749),
-  lng: Number(import.meta.env['VITE_CENTER_LNG'] ?? -122.4194),
-};
-
-const INITIAL_VIEW = {
-  longitude: CENTER.lng,
-  latitude: CENTER.lat,
-  zoom: 12.2,
-  pitch: 45,
-  bearing: 0,
-};
-
-const STATUS_COLOR: Record<DriverDot['s'], [number, number, number]> = {
-  available: [46, 204, 113],
-  claimed: [241, 196, 15],
-  on_trip: [52, 152, 219],
-};
-
-/** m ∈ [1,3] → amber→red ramp; alpha rises with intensity. */
-function surgeColor(m: number): [number, number, number, number] {
-  const t = Math.min(1, Math.max(0, (m - 1) / 2));
-  return [255, Math.round(190 * (1 - t)), 30, Math.round(90 + 110 * t)];
-}
+const SPARK_LEN = 60; // 60 samples ≈ 60s at the 1s tick.
+const PULSE_MS = 1_600;
 
 export function App(): ReactElement {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [connected, setConnected] = useState(false);
+  const [series, setSeries] = useState<Series>({ matchesPerSec: [], p50: [], p99: [] });
+  const [matched, setMatched] = useState<Set<string>>(new Set());
+  const [layers, setLayers] = useState<LayerState>({ surge: true, arcs: true, grid: false });
   const [hotspot, setHotspot] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [spawning, setSpawning] = useState(false);
+  const [proof, setProof] = useState<ProofState>({ phase: 'idle' });
+  const [crash, setCrash] = useState<CrashState>({ phase: 'idle' });
+  const [tripId, setTripId] = useState<string | null>(null);
+
+  // Previous per-driver status + pulse expiries, for the "fresh match" flash.
+  const prevStatus = useRef<Map<string, string>>(new Map());
+  const pulseUntil = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     const es = new EventSource(readUrl('/events'));
     es.onopen = () => setConnected(true);
     es.onmessage = (ev) => {
+      let s: Snapshot;
       try {
-        setSnap(JSON.parse(ev.data as string) as Snapshot);
+        s = JSON.parse(ev.data as string) as Snapshot;
       } catch {
-        /* ignore a malformed frame */
+        return; // malformed frame
       }
+      setConnected(true);
+      setSnap(s);
+
+      // 60s sparkline buffers.
+      setSeries((prev) => ({
+        matchesPerSec: cap([...prev.matchesPerSec, s.counters.matchesPerSec]),
+        p50: cap([...prev.p50, s.counters.p50Ms]),
+        p99: cap([...prev.p99, s.counters.p99Ms]),
+      }));
+
+      // Fresh-match pulse: a driver that just entered on_trip flashes green.
+      const now = Date.now();
+      const prev = prevStatus.current;
+      const next = new Map<string, string>();
+      for (const d of s.drivers) {
+        const was = prev.get(d.id);
+        if (d.s === 'on_trip' && was !== undefined && was !== 'on_trip') {
+          pulseUntil.current.set(d.id, now + PULSE_MS);
+        }
+        next.set(d.id, d.s);
+      }
+      prevStatus.current = next;
+      for (const [id, until] of pulseUntil.current) if (until <= now) pulseUntil.current.delete(id);
+      setMatched(new Set(pulseUntil.current.keys()));
     };
     es.onerror = () => setConnected(false); // EventSource auto-reconnects
     return () => es.close();
   }, []);
 
-  async function spawn(n: number): Promise<void> {
-    setBusy(true);
-    try {
-      await fetch(readUrl('/spawn'), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ n, hotspot }),
-      });
-    } catch {
-      /* the counters will show whether it landed */
-    } finally {
-      setBusy(false);
-    }
-  }
+  const spawn = useCallback(
+    (n: number) => {
+      setSpawning(true);
+      spawnRequests(n, hotspot).then(
+        (r) => toast.success(`Spawned ${r.spawned} requests`, { description: hotspot ? 'clustered into one hotspot cell' : 'scattered across the city' }),
+        () => toast.error('Spawn failed', { description: 'the read model didn’t accept the request' }),
+      ).finally(() => setSpawning(false));
+    },
+    [hotspot],
+  );
 
-  const layers = useMemo<Layer[]>(() => {
-    if (snap === null) return [];
-    return [
-      new H3HexagonLayer<SurgeCell>({
-        id: 'surge',
-        data: snap.surge,
-        getHexagon: (d) => d.cell,
-        extruded: true,
-        elevationScale: 1,
-        getElevation: (d) => (d.m - 1) * 400,
-        getFillColor: (d) => surgeColor(d.m),
-        pickable: true,
-        opacity: 0.55,
-      }),
-      new ArcLayer<TripArc>({
-        id: 'trips',
-        data: snap.trips,
-        getSourcePosition: (d) => [d.plng, d.plat],
-        getTargetPosition: (d) => [d.dlng, d.dlat],
-        getSourceColor: [52, 152, 219],
-        getTargetColor: [155, 89, 182],
-        getWidth: 1.5,
-        greatCircle: false,
-      }),
-      new ScatterplotLayer<DriverDot>({
-        id: 'drivers',
-        data: snap.drivers,
-        getPosition: (d) => [d.lng, d.lat],
-        getFillColor: (d) => STATUS_COLOR[d.s],
-        getRadius: 22,
-        radiusMinPixels: 1.5,
-        radiusMaxPixels: 4,
-        pickable: false,
-      }),
-    ];
-  }, [snap]);
+  const doProof = useCallback(() => {
+    setProof({ phase: 'running' });
+    runProof().then(
+      (result) => {
+        setProof({ phase: 'done', result });
+        toast.success(`${result.matched} matched · ${result.unmatched} unmatched · ${result.doubleAssignments} double-assignments`);
+      },
+      (err: unknown) => setProof({ phase: 'error', message: err instanceof Error ? err.message : 'request failed' }),
+    );
+  }, []);
 
-  const c = snap?.counters;
+  const doCrash = useCallback(() => {
+    setCrash({ phase: 'running' });
+    crashMatcher().then(
+      (result) => {
+        setCrash({ phase: 'done', result });
+        if (result.recovered) toast.success(`Janitor recovered in ${result.recoveryMs} ms`, { description: '0 double-assignments throughout' });
+        else toast.error('Janitor did not recover in the window', { description: 'is the matcher running?' });
+      },
+      (err: unknown) => setCrash({ phase: 'error', message: err instanceof Error ? err.message : 'request failed' }),
+    );
+  }, []);
 
   return (
-    <div style={{ position: 'absolute', inset: 0 }}>
-      <DeckGL initialViewState={INITIAL_VIEW} controller layers={layers} style={{ background: '#0a0e14' }} />
+    <div className="absolute inset-0 overflow-hidden">
+      <FleetMap snapshot={snap} layers={layers} matched={matched} onTripClick={setTripId} />
 
-      {/* HUD */}
-      <div style={panel('top', 'left')}>
-        <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 0.5, marginBottom: 8 }}>
-          FLEETLINE <span style={{ color: '#8aa0b6', fontWeight: 400 }}>live dispatch</span>
+      {/* Top bar: HUD (left) + layers (right, collapses to a popover on phones). */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
+        <Hud counters={snap?.counters ?? null} series={series} connected={connected} />
+
+        <div className="hidden min-[600px]:block">
+          <LayerToggles layers={layers} onChange={setLayers} />
         </div>
-        <Stat label="drivers" value={c ? c.driversTotal.toLocaleString() : '—'} sub={snap ? `${snap.driversShown} shown` : ''} />
-        <Stat label="matches/sec" value={c ? c.matchesPerSec.toFixed(1) : '—'} accent="#2ecc71" />
-        <Stat label="match p50 / p99" value={c ? `${c.p50Ms} / ${c.p99Ms} ms` : '—'} />
-        <Stat label="active trips" value={c ? String(c.activeTrips) : '—'} accent="#3498db" />
-        <Stat label="unmatched" value={c ? `${(c.unmatchedRate * 100).toFixed(1)}%` : '—'} />
-        <Stat label="surge max" value={c ? `${c.surgeMax.toFixed(2)}×` : '—'} accent={c && c.surgeMax > 1 ? '#ff5a3c' : '#8aa0b6'} />
-      </div>
-
-      {/* Legend */}
-      <div style={{ ...panel('top', 'right'), fontSize: 12 }}>
-        <Swatch color="#2ecc71" label="available" />
-        <Swatch color="#f1c40f" label="claimed" />
-        <Swatch color="#3498db" label="on trip" />
-        <div style={{ height: 8 }} />
-        <Swatch color="#ff5a3c" label="surge cell" />
-        <Swatch color="#9b59b6" label="trip arc → drop" />
-      </div>
-
-      {/* Controls */}
-      <div style={{ ...panel('bottom', 'left'), display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200 }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button style={btn} disabled={busy} onClick={() => void spawn(50)}>
-            spawn 50
-          </button>
-          <button style={btn} disabled={busy} onClick={() => void spawn(300)}>
-            spawn 300
-          </button>
-        </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-          <input type="checkbox" checked={hotspot} onChange={(e) => setHotspot(e.target.checked)} />
-          hotspot cluster <span style={{ color: '#8aa0b6' }}>(forces a cell to surge)</span>
-        </label>
-        <div style={{ fontSize: 11, color: '#6b8098', lineHeight: 1.5 }}>
-          chaos: <code>docker compose kill matcher</code> and watch the janitor release stranded claims —
-          active trips keep completing, no driver double-booked.
+        <div className="pointer-events-auto min-[600px]:hidden">
+          <Popover
+            label="Layers"
+            trigger={
+              <button className="panel grid h-10 w-10 place-items-center text-muted transition-colors hover:text-amber">
+                <LayersIcon size={18} />
+              </button>
+            }
+          >
+            <LayerToggles layers={layers} onChange={setLayers} bare />
+          </Popover>
         </div>
       </div>
 
-      {/* Connection pill */}
-      <div style={{ ...panel('bottom', 'right'), fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ width: 9, height: 9, borderRadius: 9, background: connected ? '#2ecc71' : '#e74c3c' }} />
-        {connected ? 'streaming' : 'reconnecting…'}
+      {/* Bottom dock. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-3">
+        <BottomDock
+          driversTotal={snap?.counters.driversTotal ?? null}
+          hotspot={hotspot}
+          onHotspot={setHotspot}
+          onSpawn={spawn}
+          spawning={spawning}
+          onRunProof={doProof}
+          proofRunning={proof.phase === 'running'}
+          onCrash={() => setCrash({ phase: 'confirm' })}
+          crashRunning={crash.phase === 'running'}
+        />
       </div>
+
+      {COMMIT_SHA !== '' && (
+        <div className="pointer-events-none absolute bottom-1 left-2 font-mono text-[9px] text-muted/40">
+          {COMMIT_SHA.slice(0, 7)}
+        </div>
+      )}
+
+      <FirstVisitOverlay />
+      <ProofOverlay state={proof} onOpenChange={(o) => !o && setProof({ phase: 'idle' })} />
+      <CrashDialog
+        state={crash}
+        onConfirm={doCrash}
+        onOpenChange={(o) => !o && setCrash({ phase: 'idle' })}
+      />
+      <TripInspector tripId={tripId} onClose={() => setTripId(null)} />
+
+      {/* Empty state: no stream yet. */}
+      {snap === null && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center">
+          <Card className="p-5 text-center">
+            <div className="font-hud text-[13px] font-600 uppercase tracking-wide text-muted">
+              {connected ? 'waiting for the first snapshot…' : 'connecting to the read model…'}
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
 
-function Stat(props: { label: string; value: string; sub?: string; accent?: string }): ReactElement {
-  return (
-    <div style={{ marginBottom: 6 }}>
-      <div style={{ fontSize: 11, color: '#8aa0b6', textTransform: 'uppercase', letterSpacing: 0.6 }}>
-        {props.label}
-      </div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: props.accent ?? '#e6edf3', fontVariantNumeric: 'tabular-nums' }}>
-        {props.value}
-        {props.sub !== undefined && props.sub !== '' && (
-          <span style={{ fontSize: 11, fontWeight: 400, color: '#6b8098', marginLeft: 6 }}>{props.sub}</span>
-        )}
-      </div>
-    </div>
-  );
+function cap(arr: number[]): number[] {
+  return arr.length > SPARK_LEN ? arr.slice(arr.length - SPARK_LEN) : arr;
 }
-
-function Swatch(props: { color: string; label: string }): ReactElement {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-      <span style={{ width: 10, height: 10, borderRadius: 10, background: props.color }} />
-      {props.label}
-    </div>
-  );
-}
-
-function panel(v: 'top' | 'bottom', h: 'left' | 'right'): CSSProperties {
-  return {
-    position: 'absolute',
-    ...(v === 'top' ? { top: 16 } : { bottom: 16 }),
-    ...(h === 'left' ? { left: 16 } : { right: 16 }),
-    padding: '14px 16px',
-    background: 'rgba(14, 20, 28, 0.82)',
-    border: '1px solid rgba(120, 150, 180, 0.18)',
-    borderRadius: 12,
-    color: '#e6edf3',
-    backdropFilter: 'blur(8px)',
-    boxShadow: '0 8px 30px rgba(0,0,0,0.45)',
-  };
-}
-
-const btn: CSSProperties = {
-  flex: 1,
-  padding: '8px 10px',
-  background: 'rgba(52, 152, 219, 0.18)',
-  border: '1px solid rgba(52, 152, 219, 0.5)',
-  borderRadius: 8,
-  color: '#e6edf3',
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: 'pointer',
-};

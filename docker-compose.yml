@@ -159,6 +159,9 @@ services:
       args:
         VITE_READMODEL_URL: ${VITE_READMODEL_URL:-http://localhost:4600}
         VITE_READMODEL_TOKEN: ${READMODEL_TOKEN:-fleetline-demo-token}
+        # Optional: enables the didactic {} panels' GitHub deep-links + SHA footer.
+        VITE_REPO_URL: ${VITE_REPO_URL:-}
+        VITE_COMMIT_SHA: ${VITE_COMMIT_SHA:-}
     ports:
       - '4620:4620'
     depends_on:

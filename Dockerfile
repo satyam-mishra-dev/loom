@@ -34,6 +34,13 @@ ENV VITE_READMODEL_URL=$VITE_READMODEL_URL
 # model's now-gated /events + /spawn. Must match the read model's READ_MODEL_TOKEN.
 ARG VITE_READMODEL_TOKEN=fleetline-demo-token
 ENV VITE_READMODEL_TOKEN=$VITE_READMODEL_TOKEN
+# Optional: base GitHub URL for the didactic {} deep-links (ARCHITECTURE.md +
+# tests) and the commit SHA for the authenticity footer. Empty ⇒ the panels show
+# on-disk paths instead of links, and the footer hides.
+ARG VITE_REPO_URL=
+ENV VITE_REPO_URL=$VITE_REPO_URL
+ARG VITE_COMMIT_SHA=
+ENV VITE_COMMIT_SHA=$VITE_COMMIT_SHA
 RUN npm run build --workspace=@fleetline/dashboard
 
 # ---- dashboard: serve the static bundle with a zero-dep node server ----

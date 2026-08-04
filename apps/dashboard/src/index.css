@@ -1,0 +1,127 @@
+@import 'tailwindcss';
+
+/* Fonts bundled via @fontsource — no CDN at runtime (deployment CSP forbids it).
+   Barlow Semi Condensed = HUD labels/headers (highway-signage DNA), Inter =
+   body/settings, IBM Plex Mono = telemetry numbers. */
+@import '@fontsource/barlow-semi-condensed/500.css';
+@import '@fontsource/barlow-semi-condensed/600.css';
+@import '@fontsource/barlow-semi-condensed/700.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+
+/* §3.2 tokens — the whole palette. No hex outside this block anywhere. */
+@theme {
+  --color-ground: #0c111c;
+  --color-line: #223049;
+  --color-fg: #e8ecf4;
+  --color-muted: #9aa8bf; /* idle drivers + secondary text (cool silver) */
+  --color-amber: #ffb020; /* actions, offered state, surge root */
+  --color-intrip: #4fc3f7; /* en-route / in-trip */
+  --color-matched: #7ee0a3; /* fresh match pulse, success */
+  --color-alarm: #ff5d5d; /* crash, double-claim=never, kill */
+  --color-surge1: #ffb020;
+  --color-surge2: #ff7a45;
+  --color-surge3: #ff4d4d;
+
+  --font-hud: 'Barlow Semi Condensed', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* numeric weight utilities (font-500/600/700) used across the HUD */
+  --font-weight-500: 500;
+  --font-weight-600: 600;
+  --font-weight-700: 700;
+
+  --radius-card: 10px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    margin: 0;
+    height: 100%;
+    width: 100%;
+    background: var(--color-ground);
+    color: var(--color-fg);
+    font-family: var(--font-body);
+    overflow: hidden;
+  }
+
+  * {
+    border-color: var(--color-line);
+  }
+
+  /* Numbers are the heroes — every figure tabular. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* All-caps wide-tracked microlabels on HUD stats. */
+  .microlabel {
+    font-family: var(--font-hud);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+    color: var(--color-muted);
+  }
+
+  /* Keyboard focus visible everywhere (quality floor). */
+  :focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+/* The HUD card surface: translucent panel + backdrop blur (§3.2 --panel). */
+.panel {
+  background: rgba(16, 22, 36, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+
+/* Signature moment only; everything else quiet (150–200ms). Reduced motion off. */
+@keyframes fl-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(126, 224, 163, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 0 12px rgba(126, 224, 163, 0);
+  }
+}
+@keyframes fl-streak {
+  0% {
+    transform: translate(var(--fx), var(--fy)) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes fl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
