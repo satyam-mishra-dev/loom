@@ -196,8 +196,9 @@ knee.
 
 ### Correctness (unchanged, re-verified on the final tree)
 
-- Unit: **125 passed**.
-- Integration (Postgres+Redis via testcontainers): **78 passed**.
+- Unit: **138 passed**.
+- Integration (Postgres+Redis via testcontainers): **87 passed** (gateway 20,
+  matcher 21, read-model 5, core 33, db 8).
 - **Signature `no-double-assignment` (2) + crash variant (1): 3 passed.**
 - E2E lifecycle: **1 passed**.
 
@@ -213,8 +214,8 @@ them.
 
 The optimization sweep above (RPS 10–100) maps the queuing _slope_ but never
 reaches saturation: throughput stays matched to demand the whole way. Finding
-where the fleet first stops keeping up — the knee the README flags as the
-deliberate next experiment — needs a ramp that pushes past it.
+where the fleet first stops keeping up — the knee the README points at — needs a
+ramp that pushes past it.
 
 **Source:** `BENCH_RPS=50,100,150,200,250,300 BENCH_OUT=bench-saturation.json npm run bench`
 — same harness, same seed (42), same 5 000-driver fleet, 8 consumers, 12 s
