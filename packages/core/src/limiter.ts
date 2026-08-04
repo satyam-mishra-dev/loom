@@ -10,7 +10,7 @@ import {
 /**
  * Degradation strategy for the rate limiter — the limiter's own store is a
  * dependency that fails, and this class decides what happens when it does
- * (pattern notes §7, rate-limiter-flexible's "insurance" concept).
+ * (rate-limiter-flexible's "insurance" concept).
  *
  * DEFAULT: fail-OPEN with a local approximation. A public limiter that guards
  * capacity exists to protect the service; rejecting 100% of traffic because
@@ -141,7 +141,7 @@ export class DegradingLimiter {
     const decision = gcraDecide(this.local.get(key) ?? null, nowSec, this.config, cost);
     if (decision.allowed) {
       if (!this.local.has(key) && this.local.size >= this.fallbackMaxKeys) {
-        // ponytail: FIFO eviction (oldest inserted), not true LRU — bounds
+        // NOTE: FIFO eviction (oldest inserted), not true LRU — bounds
         // memory during an outage; upgrade to LRU if hot keys get evicted.
         const oldest = this.local.keys().next().value;
         if (oldest !== undefined) this.local.delete(oldest);

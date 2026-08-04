@@ -6,7 +6,7 @@ import { Button, Card } from './ui/base.js';
 const SEEN_KEY = 'loom.seen-intro.v1';
 
 /**
- * First-visit card (§3.4): what this is / what to press / link to the code,
+ * First-visit card: what this is / what to press / link to the code,
  * then it gets out of the way. Dismissal persists in localStorage.
  *
  * TODO(voice): the three lines below are neutral factual placeholders written by

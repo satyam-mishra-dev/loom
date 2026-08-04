@@ -10,7 +10,7 @@ export interface Series {
   p99: number[];
 }
 
-/** Top-left HUD: live counters + 60s sparklines (§3.4). */
+/** Top-left HUD: live counters + 60s sparklines. */
 export function Hud({
   counters,
   series,

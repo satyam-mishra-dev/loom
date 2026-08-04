@@ -14,7 +14,7 @@ import { driverKey } from './geo-index.js';
  * a consistency check (a driver whose hash says available but who is missing
  * from its set is refused, not repaired, here).
  *
- * TTL lives in the DATA, not the process (pattern notes §3 / asynq's lease):
+ * TTL lives in the DATA, not the process (asynq's lease):
  * the claim value carries `expiresAt`, and confirmClaim checks it against the
  * caller's clock. Every claim is ALSO indexed in the `claims:by-expiry` ZSET
  * (scored by expiresAt, written in the same script) so the janitor's sweep is

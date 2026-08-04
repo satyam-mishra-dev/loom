@@ -2,7 +2,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactElement } from 'react';
 import { cn } from '../../lib/utils.js';
 
-/* shadcn-style primitives, themed hard to §3.2. Copy-in components (the shadcn
+/* shadcn-style primitives, themed hard to the design tokens. Copy-in components (the shadcn
    model), not a runtime library — every color is a token. */
 
 const button = cva(

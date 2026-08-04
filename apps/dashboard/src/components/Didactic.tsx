@@ -3,11 +3,11 @@ import type { ReactElement } from 'react';
 import { Popover } from './ui/popover.js';
 
 /**
- * §3.5 didactic affordance: a small {} on each major panel opens a plain-language
+ * Didactic affordance: a small {} on each major panel opens a plain-language
  * explanation of the mechanism + a deep link to the ARCHITECTURE.md section and
  * the test on disk.
  *
- * IMPORTANT (§3.5 / execution directive 4): the sentences below are NEUTRAL,
+ * IMPORTANT: the sentences below are NEUTRAL,
  * FACTUAL technical descriptions written by the agent. They are NOT the author's
  * voice. Each is marked `TODO(voice)` for the author to rewrite as an interview
  * answer in miniature before the demo ships.

@@ -383,7 +383,7 @@ export class TripStore {
    * janitor holds only the driverId, not the tripId. Find that driver's
    * orphaned 'offered' trip and revert it the same way janitorRevert does. The
    * claim key being gone means there is no live claim for this driver, so any
-   * 'offered' trip of theirs is stranded and safe to revert. (ponytail: the
+   * 'offered' trip of theirs is stranded and safe to revert. (NOTE: the
    * theoretical race where a matcher re-claims the driver and creates a NEW
    * offered row in the microseconds before this query is collapsed by the
    * cascade's own guards — it gets a 'lost' and self-heals.) Returns the
@@ -405,7 +405,7 @@ export class TripStore {
    * 'on_trip' in Redis with no active trip. Returns driverIds whose latest trip
    * is terminal and who therefore should be freed if still marked on_trip in
    * Redis — the caller does the Redis check + freeDriver (a no-op unless the
-   * driver really is stuck). ponytail: scans completed trips with a LIMIT; a
+   * driver really is stuck). NOTE: scans completed trips with a LIMIT; a
    * completion watermark/index is the upgrade path if this ever gets hot.
    */
   async driversWithTerminalTripOnly(limit: number): Promise<string[]> {

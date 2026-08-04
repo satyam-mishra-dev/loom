@@ -2,7 +2,7 @@ import type { Redis } from 'ioredis';
 import { cellKey } from './geo-index.js';
 
 /**
- * Per-cell surge pricing (project brief §5.7).
+ * Per-cell surge pricing.
  *
  * multiplier = min(3.0, max(1.0, demand / supply)), where demand is the count
  * of ride requests in a cell over a sliding 60s window and supply is the count

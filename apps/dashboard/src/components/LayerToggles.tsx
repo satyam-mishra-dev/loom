@@ -16,7 +16,7 @@ const LEGEND: { color: string; label: string }[] = [
   { color: '#7EE0A3', label: 'fresh match' },
 ];
 
-/** Top-right: layer toggles + the driver-state legend (§3.4). `bare` drops the
+/** Top-right: layer toggles + the driver-state legend. `bare` drops the
  *  Card wrapper so the same content can live inside a mobile popover. */
 export function LayerToggles({
   layers,

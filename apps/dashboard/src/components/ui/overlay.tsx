@@ -4,7 +4,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { cn } from '../../lib/utils.js';
 
 /* Sheet (right slide-over) and Dialog (centered) share Radix Dialog underneath.
-   Themed to §3.2: translucent panel, backdrop blur, amber focus. */
+   Themed: translucent panel, backdrop blur, amber focus. */
 
 const overlayClass =
   'fixed inset-0 z-50 bg-ground/70 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out';

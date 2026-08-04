@@ -336,7 +336,7 @@ export class MatcherCore {
    * Startup reaper: drain both processing lists back onto their queues, and
    * re-enqueue requests stuck 'pending' past a grace (covers a crash between
    * a row INSERT/janitor revert and its LPUSH — a duplicate LPUSH is safe,
-   * the row guard collapses it). ponytail: shared processing lists drained on
+   * the row guard collapses it). NOTE: shared processing lists drained on
    * ANY instance start — a starting instance re-queues a peer's in-flight
    * ids, which the guards turn into counted skips (at-least-once, safe,
    * occasionally wasteful). The upgrade path is asynq's lease pattern:

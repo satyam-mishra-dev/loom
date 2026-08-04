@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 import { Button, Card } from './ui/base.js';
 import { Switch } from './ui/switch.js';
 
-/** Bottom dock: spawn load, hotspot, driver count, Proof Mode, Crash (§3.4). */
+/** Bottom dock: spawn load, hotspot, driver count, Proof Mode, Crash. */
 export function BottomDock({
   driversTotal,
   hotspot,

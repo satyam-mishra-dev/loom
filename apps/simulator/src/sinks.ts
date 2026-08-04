@@ -95,7 +95,7 @@ export class WsSink implements Sink {
     }
   }
 
-  // ponytail: drop-on-backpressure with counters; batching/acks arrive with gateway ingestion.
+  // NOTE: drop-on-backpressure with counters; batching/acks arrive with gateway ingestion.
   send(msg: SimMessage): void {
     const data = JSON.stringify(msg);
     if (this.ws.readyState === WebSocket.OPEN) {

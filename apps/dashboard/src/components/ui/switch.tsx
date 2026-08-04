@@ -2,7 +2,7 @@ import * as SwitchPrimitive from '@radix-ui/react-switch';
 import type { ReactElement } from 'react';
 import { cn } from '../../lib/utils.js';
 
-/** Themed toggle (§3.2): amber when on, quiet line when off. */
+/** Themed toggle: amber when on, quiet line when off. */
 export function Switch(props: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;

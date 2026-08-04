@@ -19,7 +19,7 @@ const STEPS = [
 type Fetch =
   { phase: 'loading' } | { phase: 'ok'; trip: TripHistory } | { phase: 'error'; message: string };
 
-/** Right Sheet: the trip state machine + offer cascade, read from real data (§3.4). */
+/** Right Sheet: the trip state machine + offer cascade, read from real data. */
 export function TripInspector({
   tripId,
   onClose,

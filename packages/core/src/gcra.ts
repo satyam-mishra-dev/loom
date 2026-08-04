@@ -3,7 +3,7 @@ import type { Redis } from 'ioredis';
 /**
  * GCRA (Generic Cell Rate Algorithm) rate limiter over Redis + Lua.
  *
- * Ported from the arithmetic in go-redis/redis_rate (pattern notes §4), not
+ * Ported from the arithmetic in go-redis/redis_rate, not
  * copied. GCRA stores ONE value per key — the TAT (Theoretical Arrival Time),
  * the wall time at which the NEXT conforming request is scheduled. Everything
  * else (remaining burst, retry-after, reset-after) is derived from TAT and the

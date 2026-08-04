@@ -20,7 +20,7 @@ export interface JanitorOptions {
 }
 
 /**
- * THE JANITOR — the visibility timeout made real (notes §3 / asynq's
+ * THE JANITOR — the visibility timeout made real (asynq's
  * recoverer). A matcher that dies between claim and offer strands nobody,
  * because the claim's expiry lives in DATA: the value's expiresAt, indexed in
  * the claims:by-expiry ZSET written by the same Lua that created the claim.

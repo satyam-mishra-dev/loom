@@ -24,7 +24,7 @@ function offset(i: number): { fx: string; fy: string } {
   return { fx: `${(Math.cos(a) * r).toFixed(0)}px`, fy: `${(Math.sin(a) * r).toFixed(0)}px` };
 }
 
-/** §3.3 signature moment. Renders the REAL /proof outcome; reduced motion → card. */
+/** Signature moment. Renders the REAL /proof outcome; reduced motion → card. */
 export function ProofOverlay({
   state,
   onOpenChange,

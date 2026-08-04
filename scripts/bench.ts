@@ -14,7 +14,7 @@ import { signToken } from '../apps/gateway/src/auth.js';
 import { createRng } from '../apps/simulator/src/rng.js';
 
 /**
- * scripts/bench.ts — the load bench (§5.9). Boots the REAL stack (real Redis +
+ * scripts/bench.ts — the load bench. Boots the REAL stack (real Redis +
  * Postgres via testcontainers, in-process gateway + matcher + janitor) and
  * drives it with the REAL seeded simulator at increasing RPS. Latency is
  * request→match measured from Postgres event timestamps — ride_requests.

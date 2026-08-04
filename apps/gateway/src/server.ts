@@ -48,7 +48,7 @@ export interface GatewayOptions {
   /** App-level heartbeat staleness threshold (default 10s). */
   staleMs?: number;
   /**
-   * Per-source GCRA on the ride-request intake path (§5.7). Keyed by the
+   * Per-source GCRA on the ride-request intake path. Keyed by the
    * socket's authenticated principal (the rider/source). Defaults are generous
    * so a normal fleet never trips them; the demo/tests tighten them to show
    * rejection. Over-limit requests are rejected + counted, never silently
@@ -257,7 +257,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
         [requestId, lat, lng, destLat, destLng],
       );
       await redis.lpush(REQUESTS_QUEUE, requestId);
-      // Feed the surge demand window for this request's cell (§5.7). Best
+      // Feed the surge demand window for this request's cell. Best
       // effort — a surge miss must never fail intake, so it rides its own
       // catch and the enqueue above is already committed.
       surge.recordDemand(cellFor(lat, lng), requestId, now()).catch((err: unknown) => {
@@ -435,7 +435,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     const boundIds = new Set<string>([principal]);
     bindDriver(principal, socket);
 
-    // Transport liveness (notes §8): server pings every pingIntervalMs; no
+    // Transport liveness: server pings every pingIntervalMs; no
     // pong within pongTimeoutMs ⇒ half-open TCP (NAT/mobile), terminate.
     // Deliberately independent of the app-level heartbeatMs in Redis: the
     // socket check catches dead LINKS, the Redis heartbeat catches dead

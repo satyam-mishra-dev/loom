@@ -15,7 +15,7 @@ export type CrashState =
 const REPO_URL = (import.meta.env['VITE_REPO_URL'] as string | undefined) ?? '';
 const TEST_PATH = TOPICS['crash']!.testPath;
 
-/** §3.3 runner-up. A real abandoned-claim fault, recovered by the real janitor. */
+/** Runner-up. A real abandoned-claim fault, recovered by the real janitor. */
 export function CrashDialog({
   state,
   onConfirm,
