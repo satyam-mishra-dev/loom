@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { haversineMeters, rankCandidates, type DriverRecord } from '../src/index.js';
+import {
+  URBAN_SPEED_MPS,
+  estimateEtaSeconds,
+  haversineMeters,
+  rankCandidates,
+  type DriverRecord,
+} from '../src/index.js';
 
 function driver(id: string, lat: number, lng: number, heartbeatMs: number): DriverRecord {
   return { driverId: id, cell: 'c', status: 'available', lat, lng, heartbeatMs };
@@ -58,5 +64,27 @@ describe('rankCandidates', () => {
     ];
     rankCandidates(RIDER.lat, RIDER.lng, input);
     expect(input.map((c) => c.driverId)).toEqual(['x', 'y']);
+  });
+
+  it('the shorter-ETA driver outranks the farther one, and ETA = distance ÷ urban speed', () => {
+    const ranked = rankCandidates(RIDER.lat, RIDER.lng, [
+      driver('far', RIDER.lat + 0.01, RIDER.lng, 1000),
+      driver('near', RIDER.lat + 0.001, RIDER.lng, 1000),
+    ]);
+    expect(ranked.map((c) => c.driverId)).toEqual(['near', 'far']);
+    expect(ranked[0]!.etaSeconds).toBeLessThan(ranked[1]!.etaSeconds);
+    // ETA is exactly the naive model — distance over the assumed speed.
+    expect(ranked[0]!.etaSeconds).toBeCloseTo(ranked[0]!.distanceM / URBAN_SPEED_MPS, 9);
+    expect(estimateEtaSeconds(0)).toBe(0);
+  });
+
+  it('equal ETA ties break deterministically (freshest heartbeat, then driverId)', () => {
+    const ranked = rankCandidates(RIDER.lat, RIDER.lng, [
+      driver('b', RIDER.lat + 0.002, RIDER.lng, 2000),
+      driver('a', RIDER.lat + 0.002, RIDER.lng, 2000),
+      driver('fresh', RIDER.lat + 0.002, RIDER.lng, 9000),
+    ]);
+    expect(ranked.map((c) => c.driverId)).toEqual(['fresh', 'a', 'b']);
+    expect(ranked[0]!.etaSeconds).toBeCloseTo(ranked[1]!.etaSeconds, 9);
   });
 });
