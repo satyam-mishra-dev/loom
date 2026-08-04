@@ -115,8 +115,9 @@ similar payment-intent machine. **Rejected** extracting a shared state-machine
 package. The two machines rhyme — both are pure `(state, event) → state`
 functions that reject illegal transitions and emit a transactional-outbox row per
 transition — but their states, events, and guards are entirely different
-(`requested → matching → offered → matched → en_route → in_trip → completed`
-here; a payment lifecycle there), and the shared surface would be a two-line
+(`requested → matching → offered → matched → en_route → in_trip → completed`,
+with a `cancelled` terminal any live state can fall into, here; a payment
+lifecycle there), and the shared surface would be a two-line
 interface wrapping two unrelated bodies. Writing it fresh was cheap, it is
 genuinely better the second time (the trip states carry exactly the data each
 state is entitled to, so "en_route requires a driver" is a _type_, not a runtime

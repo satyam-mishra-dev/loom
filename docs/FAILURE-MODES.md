@@ -78,19 +78,70 @@ app is dead.
 level the gateway sends a server ping on an interval and terminates the socket if
 no pong arrives within the pong timeout — that catches dead _links_, including
 half-open TCP that never delivers a FIN. At the application level, a driver that
-stops sending position pings goes stale: the heartbeat sweep (a `ZRANGEBYSCORE`
-over the heartbeat ZSET) removes it from its available set and marks it
-`offline`, so it cannot be matched — that catches dead _drivers_ whose socket is
-somehow still open. The two are deliberately separate: a swept driver on a live
-socket comes straight back by pinging again, and a zombie socket that pings
-nothing cannot stay matchable. An in-flight trip's row is untouched by either; if
-the driver never returns, the trip's progress events simply stop and it stays in
-its last state until an operator or a future reconciler resolves it (an honest,
-logged open item, not a silent corruption).
+stops pinging goes stale: the heartbeat sweep (a `ZRANGEBYSCORE` over the
+heartbeat ZSET) drops an idle driver from its available set and marks it
+`offline`, so it cannot be matched — that catches dead _drivers_ on a socket that
+somehow stays open. The two are deliberately separate: a swept idle driver on a
+live socket comes straight back by pinging again, and a zombie socket that pings
+nothing cannot stay matchable.
 
-**Proof.** The gateway integration suite covers both: sockets that miss the pong
-deadline are terminated and unbound, and the sweep offlines silent drivers and
-drops them from the heartbeat ZSET.
+An _on-trip_ driver is the one case the sweep leaves alone — never offlined,
+never dropped from the ZSET. Demoting it would be a correctness bug rather than
+cleanup: its reconnect ping would resurrect it into an available set and make it
+claimable for a _second_ trip while still on its first. An on-trip driver's
+liveness is the matcher and janitor's concern, not the sweep's. So a driver whose
+socket dies mid-trip keeps its trip: when a per-driver principal reconnects, the
+gateway re-sends the active trip it still owns (`sessions_resumed_total`), the
+driver picks up where it left off, and its resumed pings stay position-only — it
+never re-enters the matchable pool. If the driver truly never comes back the trip
+lingers in its last state; a reconciler keyed on trip age is the upgrade path (an
+honest, logged open item, not a silent corruption).
+
+**Proof.** The gateway integration suite covers all three: sockets that miss the
+pong deadline are terminated and unbound; the sweep offlines silent idle drivers
+and drops them from the heartbeat ZSET but leaves an on-trip driver `on_trip` and
+tracked; and a driver that reconnects mid-trip gets its active trip re-sent,
+stays `on_trip`, and never rejoins an available set even with an aggressive sweep
+running underneath.
+
+---
+
+## A rider cancels mid-offer or mid-trip
+
+**What breaks.** A rider cancels while the matcher is mid-cascade (a driver
+claimed, an offer out) or mid-trip (a driver assigned and driving). Handled
+carelessly this races the atomic claim, the offer cascade, and the janitor at
+once — enough to double-free a driver, strand one `claimed`, or leave a cancelled
+ride still holding a car.
+
+**What happens.** The gateway forwards the cancel by `requestId` onto a
+`cancel:queue` list; a matcher `cancelLoop` drains it with the same at-least-once
+list pattern as ride intake. `cancelRide` is race-safe because the trips row is
+the authority: one locked transaction — trip-then-request lock order, the same as
+every other trip-store TX, so it can't deadlock against a concurrent accept or
+janitor sweep — flips the trip and its request to `cancelled`. That write is what
+_stops_ an in-flight cascade: the cascade's next guarded step sees a
+non-`matching` request or non-`offered` trip and backs off, exactly as it does
+when a peer steals the request. Only a trip that genuinely owns a live driver
+(`offered`/`matched`/`en_route`/`in_trip`) hands back a driver id and claim token,
+and that driver is then freed in Redis token-guarded, so a driver already
+re-claimed for another trip is never touched. A trip parked at `matching` carries
+a released-ghost driver id and frees nobody. It is idempotent throughout:
+cancelling an already-terminal ride is a counted no-op, so a duplicate cancel or a
+redelivered queue item changes nothing.
+
+**Recovery.** None to heal from — cancellation is a legal terminal transition
+(`RIDER_CANCELLED` from any non-terminal state; the two terminal states refuse
+it), not a fault. A cancel racing a crash rides the same startup drain as the
+rest of the in-flight work: `cancel:processing` items are moved back onto
+`cancel:queue` on boot.
+
+**Proof.** `apps/matcher/test/cascade.integration.test.ts` covers the mid-offer
+cancel (cascade stops, claimed driver released, never assigned), the mid-trip
+cancel (trip cancelled, on-trip driver returned to available, no strand), the
+no-trip-yet cancel, the already-completed no-op, and the full queue path through
+the running matcher. `apps/gateway/test/gateway.integration.test.ts` asserts the
+gateway enqueues a `ride_cancel` and rejects a malformed one.
 
 ---
 
