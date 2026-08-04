@@ -11,6 +11,7 @@ import { createPool, runMigrations } from '@fleetline/db';
 import { Janitor, MatcherCore } from '@fleetline/matcher';
 import { buildGateway } from '../apps/gateway/src/server.js';
 import { signToken } from '../apps/gateway/src/auth.js';
+import { createRng } from '../apps/simulator/src/rng.js';
 
 /**
  * scripts/bench.ts — the load bench (§5.9). Boots the REAL stack (real Redis +
@@ -101,7 +102,7 @@ async function main(): Promise<void> {
   });
   await gateway.app.listen({ port: 0, host: '127.0.0.1' });
   const port = (gateway.app.server.address() as AddressInfo).port;
-  const url = `ws://127.0.0.1:${port}/ws?token=${signToken('sim', SECRET)}`;
+  const url = `ws://127.0.0.1:${port}/ws?token=${signToken('fleet:sim', SECRET)}`;
 
   const matcher = new MatcherCore({ redis, pool });
   await matcher.start(8);
@@ -208,9 +209,14 @@ async function main(): Promise<void> {
 
     const geoIndex = new GeoIndex(redis);
     const searchMs: number[] = [];
+    // Seed the query points so the geo p50/p99 is reproducible under a fixed
+    // seed (the fleet layout is already seeded; the query points were not).
+    // These micro-numbers stay statistical — tens of µs of scheduling jitter —
+    // but the query SET is now identical run to run.
+    const geoRng = createRng(SEED);
     for (let i = 0; i < 500; i++) {
-      const lat = CENTER.lat + (Math.random() * 2 - 1) * 0.03;
-      const lng = CENTER.lng + (Math.random() * 2 - 1) * 0.03;
+      const lat = geoRng.range(CENTER.lat - 0.03, CENTER.lat + 0.03);
+      const lng = geoRng.range(CENTER.lng - 0.03, CENTER.lng + 0.03);
       const t = performance.now();
       await geoIndex.findCandidates(lat, lng, { need: 8, maxK: 3, nowMs: Date.now() });
       searchMs.push(performance.now() - t);
