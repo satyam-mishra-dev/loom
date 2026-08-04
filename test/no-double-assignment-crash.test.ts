@@ -157,6 +157,20 @@ describe('SIGNATURE (crash variant): kill the matcher mid-cascade', () => {
         // Phase 1: real matcher, silent drivers → live claims, offers pending.
         const matcher = spawnMatcher(18_090);
         await waitFor(async () => (await redis.keys('claim:*')).length === CONSUMERS, 30_000, 'claims held');
+        // A consumer takes the Redis claim BEFORE it commits the 'offered' trip
+        // row, so wait for Postgres to catch up too — otherwise the kill can fire
+        // while some claims still lack their committed row and the precondition
+        // below counts fewer than CONSUMERS (a setup race, not an invariant break).
+        await waitFor(
+          async () =>
+            (
+              await pool.query<{ n: number }>(
+                `SELECT count(*)::int AS n FROM trips WHERE status = 'offered'`,
+              )
+            ).rows[0]?.n === CONSUMERS,
+          30_000,
+          'offered trips committed',
+        );
 
         // The axe. No shutdown hooks, no cleanup — the process is just gone.
         matcher.kill('SIGKILL');
@@ -203,15 +217,20 @@ describe('SIGNATURE (crash variant): kill the matcher mid-cascade', () => {
         // including the requests the dead one left in requests:processing.
         accepting = true;
         const restarted = spawnMatcher(18_091);
+        // Gate on the TERMINAL trip state the assertions below check, not on the
+        // upstream ride_requests='matched' write: the match commits in the order
+        // request→matched, confirmClaim (claim deleted, driver on_trip), then
+        // trip matched→en_route LAST. Waiting on 'matched' can fire before the
+        // claim/on_trip/en_route writes land, flaking the en_route assertion.
         await waitFor(
           async () => {
             const res = await pool.query<{ n: number }>(
-              `SELECT count(*)::int AS n FROM ride_requests WHERE status = 'matched'`,
+              `SELECT count(*)::int AS n FROM trips WHERE status = 'en_route'`,
             );
             return res.rows[0]?.n === REQUESTS;
           },
           30_000,
-          'restarted matcher matched everything',
+          'restarted matcher drove every trip en_route',
         );
 
         // Final state: every request matched to a unique driver, full outbox
