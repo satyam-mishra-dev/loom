@@ -10,6 +10,7 @@ import {
   driverKey,
   type CellSurge,
 } from '@fleetline/core';
+import { runCrashDemo, runProof, tripHistory, type Deps } from './demo.js';
 
 /**
  * The read model (CQRS read side) behind the dashboard. It is deliberately a
@@ -292,10 +293,11 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
       void reply.code(204).send();
       return;
     }
-    // G3: gate the mutating (/spawn) and streaming (/events) endpoints behind
-    // the shared token when one is configured. /healthz and /metrics stay open
-    // for the compose healthcheck and scraping.
-    if (authToken !== undefined && (req.url.startsWith('/spawn') || req.url.startsWith('/events'))) {
+    // G3: gate the mutating (/spawn, /proof, /fault) and reading (/events,
+    // /trip) demo endpoints behind the shared token when one is configured.
+    // /healthz and /metrics stay open for the compose healthcheck and scraping.
+    const gated = ['/spawn', '/events', '/proof', '/fault', '/trip'].some((p) => req.url.startsWith(p));
+    if (authToken !== undefined && gated) {
       const provided = new URL(req.url, 'http://localhost').searchParams.get('token');
       if (provided !== authToken) {
         void reply.code(401).send({ error: 'unauthorized' });
@@ -373,6 +375,48 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
     }
     metrics.spawnedTotal += spawned;
     return reply.send({ spawned, hotspot });
+  });
+
+  // The demo controls share the real stores; both /proof and /fault run a heavy
+  // real scenario, so guard against overlapping runs (a double-click DoS).
+  const deps: Deps = { redis, pool, center };
+  let demoBusy = false;
+
+  // Proof Mode: seed 20 drivers into one cell, fire 200 concurrent requests
+  // through the real matcher, return the true outcome (the signature test, live).
+  app.post('/proof', async (_req, reply) => {
+    if (demoBusy) return reply.code(409).send({ error: 'a demo run is already in flight' });
+    demoBusy = true;
+    try {
+      return reply.send(await runProof(deps));
+    } catch (err) {
+      app.log.error({ err }, 'proof run failed');
+      return reply.code(500).send({ error: 'proof run failed' });
+    } finally {
+      demoBusy = false;
+    }
+  });
+
+  // Crash the matcher: inject a real abandoned claim (expired lease + orphaned
+  // offered trip) and watch the live janitor recover it — no fake recovery.
+  app.post('/fault/abandon-claim', async (_req, reply) => {
+    if (demoBusy) return reply.code(409).send({ error: 'a demo run is already in flight' });
+    demoBusy = true;
+    try {
+      return reply.send(await runCrashDemo(deps));
+    } catch (err) {
+      app.log.error({ err }, 'crash demo failed');
+      return reply.code(500).send({ error: 'crash demo failed' });
+    } finally {
+      demoBusy = false;
+    }
+  });
+
+  // Trip inspector: the real event history + offer cascade + live surge.
+  app.get<{ Params: { id: string } }>('/trip/:id/events', async (req, reply) => {
+    const history = await tripHistory(deps, req.params.id);
+    if (history === null) return reply.code(404).send({ error: 'trip not found' });
+    return reply.send(history);
   });
 
   return {
