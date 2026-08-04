@@ -48,13 +48,23 @@ again.
 
 **Recovery.** Automatic within claim TTL + one janitor interval. The claim TTL
 (12 s) deliberately exceeds the offer TTL (8 s) by a wide margin so the janitor
-can never free a driver while an accept is still in flight.
+can never free a driver while an accept is still in flight. Two backstops close
+the residual holes: (a) if Redis lets a double-claim slip through, the accept's
+`23505` is caught, the trip is reverted `offered → matching`, and the cascade
+continues to the next candidate (never stranding on the conflicting driver);
+(b) the startup reaper re-enqueues requests stuck past a grace window in *both*
+`pending` **and** `matching` — for a `matching` row with a trip it first reverts
+the trip and hands the request back to `pending`, so a request abandoned
+mid-cascade by a dead matcher (or a past-grace janitor repair) is recovered even
+if its claim is already gone.
 
 **Proof.** `test/no-double-assignment-crash.test.ts` runs the signature scenario
 and kills the matcher mid-cascade; the invariant still holds (exactly the
 available drivers matched, no double assignment). `apps/matcher/test/cascade.integration.test.ts`
 covers the janitor releasing a stranded claim and the driver becoming claimable
-again within TTL + ε.
+again within TTL + ε, the `23505`-conflict revert-and-continue, and the reaper
+recovering a request stuck `matching` with an orphaned `offered` trip and no
+live claim.
 
 ---
 
@@ -122,15 +132,21 @@ involved; a dead claim is observable by anyone who looks. Every matcher embeds
 the same sweep loop, so as long as one matcher is alive, expired claims are
 swept. If *every* sweeper is down past the claim key's grace TTL, Redis's own
 `PX` net eventually erases the key; the next janitor to wake finds the key gone,
-still cleans the ZSET entry, and repairs a driver stuck `claimed` — and the
-request revives via the matcher's stale-`pending` reaper on startup.
+still cleans the ZSET entry, and repairs a driver stuck `claimed`. Because the
+erased value took the `tripId` with it, that branch then looks the driver's
+orphaned `offered` trip up *by driver id*, reverts it `offered → matching`, and
+re-enqueues its request immediately — no wait for a process restart. (Earlier
+this branch left the trip stuck `offered` and its request stuck `matching`
+forever; the startup reaper broadening to `status IN ('pending','matching')` is
+the second, restart-time backstop for the same strand.)
 
 **Recovery.** Automatic and process-independent; "TTL lives in the data, not the
 process" is both the interview line and the correctness argument.
 
-**Proof.** The cascade integration test exercises the standalone janitor path and
-the "key gone before sweep" branch; the claim integration tests cover the Lua
-re-check semantics (`live`/`released`/`gone`).
+**Proof.** The cascade integration test exercises the standalone janitor path, the
+"key gone before sweep" branch reverting the orphaned trip and re-enqueuing, and
+the reaper recovering a stuck-`matching` request; the claim integration tests
+cover the Lua re-check semantics (`live`/`released`/`gone`).
 
 ---
 
@@ -155,6 +171,80 @@ count, so a fleet should set the fallback limit to roughly
 healthy, Redis error → fallback keeps limiting, slow Redis → timeout → fallback,
 and fail-closed → reject. `gateway.integration.test.ts` proves the intake path
 rejects over-limit requests with a 429-equivalent and counts them.
+
+---
+
+## A token tries to act for a driver it doesn't own (channel hijack)
+
+**What breaks.** A `driver_ping`, `offer_reply`, or `trip_progress` carries a
+`driverId` in its payload. Without a check, any socket with a *valid* token
+could send messages for **another** driver's id — overwriting that driver's
+position, binding its offer channel to the attacker's socket (stealing rider
+pickup PII and its offers), or accepting/declining an offer that isn't theirs.
+
+**What happens.** The gateway authorizes a **principal**, then scopes every
+payload `driverId` against it. A per-driver principal may act only for its own
+id; a **fleet** principal (id prefixed `fleet:`) may act for its whole driver
+namespace. Anything out of scope is rejected and counted (`scope_rejects_total`)
+before it can bind a channel or enqueue. The trust model is explicit: the
+simulator connects as `fleet:sim` and multiplexes all drivers over one socket —
+that is a **fleet edge aggregating a fleet's GPS**, exactly like a real dispatch
+gateway ingesting from a carrier's telematics box. The fleet token is trusted to
+speak for its fleet; it is *not* a substitute for per-device driver auth, which
+is the production upgrade path (a signed per-driver credential minted at device
+enrolment, so the gateway need not trust the aggregator blindly). See
+DECISIONS.md.
+
+**Proof.** `apps/gateway/test/gateway.integration.test.ts` asserts a driver-scoped
+token pinging/replying/reporting for another driver is rejected (no bind, no
+index write, no reply forwarded), while a `fleet:` principal drives the whole
+fleet through the E2E path.
+
+---
+
+## Two matcher instances reorder a driver's trip-progress events
+
+**What breaks.** Trip progress is `en_route → in_trip → completed`, driven by two
+driver-reported events (`arrived_pickup`, then `trip_done`). With more than one
+matcher instance, the trip-progress consumers can split a single trip's two
+events across instances and process `trip_done` *before* `arrived_pickup` lands.
+The `trip_done` transition is then illegal (the trip is still `en_route`).
+Dropping it would strand the trip `in_trip` and the driver `on_trip` forever.
+
+**What happens.** The store distinguishes a **premature** event (its predecessor
+hasn't committed — the current status is *earlier* than the transition's required
+source) from a **terminal** one (a duplicate, late, spoofed, or genuinely-illegal
+event). A premature event is **not** acked: it is re-queued after a short backoff
+so the predecessor commits first, then retried until it applies. A terminal event
+is dropped and counted. A separate periodic **reconciler** is the last backstop
+for the crash sliver where `trip_done` committed but the process died before
+freeing the driver: it frees any driver left `on_trip` whose latest trip is
+terminal.
+
+**Proof.** `apps/matcher/test/cascade.integration.test.ts` runs two instances,
+forces `trip_done` to be consumed before `arrived_pickup`, and asserts the trip
+still completes and the driver ends freed (`trip_event_premature_total > 0`).
+
+---
+
+## The read model is reachable from outside
+
+**What breaks.** The read model serves a mutating control (`POST /spawn`, which
+injects up to 2,000 real ride requests per call) and a streaming feed
+(`/events`, every driver's live position). Left unauthenticated on a reachable
+host these are an injection vector and a data leak.
+
+**What happens.** Both endpoints sit behind a shared token when `READ_MODEL_TOKEN`
+is set (compose sets it and bakes the same value into the dashboard bundle, so
+the map streams end to end). `/healthz` and `/metrics` stay open for the compose
+healthcheck and scraping. Unset (bare local dev) leaves them open with a startup
+warning. This is **demo-grade**: the token is visible in the client bundle, so it
+is a scan/curl deterrent, not user auth — a session or signed cookie is the
+production upgrade (DECISIONS.md).
+
+**Proof.** `apps/read-model/test/read-model.integration.test.ts` asserts `/spawn`
+and `/events` reject a missing/wrong token (401) and accept the right one, while
+`/healthz` stays open.
 
 ---
 

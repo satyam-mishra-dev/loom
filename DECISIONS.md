@@ -123,6 +123,38 @@ state is entitled to, so "en_route requires a driver" is a *type*, not a runtime
 check), and the honest diff between the two implementations is a better talking
 point than a forced abstraction. The *pattern* is credited; the code is its own.
 
+## Driver identity: fleet-principal scope, not per-device auth
+
+**Decided:** the WS token authorizes a *principal*, and the gateway scopes every
+payload `driverId` against it — a per-driver principal may act only for its own
+id, a `fleet:`-prefixed principal for its whole driver namespace. **Rejected**
+trusting the payload `driverId` (the original hole: any valid token could ping,
+reply, or report progress for *any* driver, hijacking its channel and offers) and
+**rejected** minting a separate socket + token per simulated driver. The
+simulator multiplexes 5,000 drivers over one socket by design; a real dispatch
+edge does the same — it aggregates a fleet's GPS from a carrier's telematics box.
+So the honest model is a **fleet principal** trusted to speak for its fleet, with
+per-driver messages scoped to that namespace, not a pretend per-device identity I
+don't actually have. The production upgrade is a signed per-driver credential
+minted at device enrolment, so the gateway need not trust the aggregator blindly;
+the scope check is the seam where that credential would plug in. `offer_reply`
+and `trip_progress` ride the same scope check, so a token cannot answer another
+driver's offer either.
+
+## Read-model auth: a demo-grade shared token, honestly labelled
+
+**Decided:** gate the read model's mutating `/spawn` and streaming `/events`
+behind a shared token (`READ_MODEL_TOKEN`); compose sets it and bakes the same
+value into the dashboard bundle so the map still streams one-command.
+**Rejected** leaving them open (a `curl /spawn` injects thousands of real
+requests; `/events` streams every driver's position) and **rejected** a real
+login for a single-page demo dashboard with no user model. The token is visible
+in the client bundle, so it is explicitly demo-grade — a deterrent against
+anonymous internet scans and stray `curl`s, not user authentication. `/healthz`
+and `/metrics` stay open for the compose healthcheck and scraping. A session or
+signed cookie behind a real identity is the production upgrade; the token check
+is where it would live.
+
 ## Migrations via node-pg-migrate; raw SQL on hot paths
 
 **Decided:** node-pg-migrate for schema, raw `pg` for queries. **Rejected** an

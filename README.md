@@ -93,9 +93,18 @@ outbox row (matcher commit) — same DB clock, no synthetic stopwatch.
 |         50 |      49.8 |     69.2 |    133.6 |    159.5 |        0% |
 |        100 |      99.7 |    101.9 |    227.2 |    359.7 |        0% |
 
+This sweep shows the **queuing slope** — latency rising with offered load on a
+fixed 5,000-driver fleet — not a saturation point: it does not push RPS past the
+fleet's capacity to find the knee (throughput stays matched to demand,
+`unmatched 0%`, across all four levels). Finding where it first breaks is a
+deliberate next experiment, not a hidden result.
+
 Geo candidate search (k-ring expand, `need=8`, `maxK=3`) over the indexed fleet:
-**p50 0.59 ms, p99 2.82 ms** across 500 searches. Reproduce with `npm run bench`
-(needs Docker; writes `scripts/bench-results.json`).
+**p50 0.59 ms, p99 2.82 ms** across 500 searches (query points now seeded, so the
+query *set* is reproducible run to run). These sub-millisecond micro-numbers stay
+**statistical** — single-digit-ms medians carry real scheduling jitter, so treat
+them as a magnitude, not a fixed constant. Reproduce with `npm run bench` (needs
+Docker; writes `scripts/bench-results.json`).
 
 ---
 
