@@ -47,9 +47,11 @@ processing list and runs the pipeline. The `pending → matching` UPDATE is the
 idempotency guard: whoever wins that row owns the request, every other delivery
 is a counted no-op — at-least-once intake, exactly-once matching. Candidate
 search is an expanding `gridDisk` (k = 0, 1, 2…) that unions the disk's available
-sets until it has enough fresh drivers or hits the radius cap, then scores them
-by haversine distance (freshest heartbeat and driver id as deterministic
-tiebreaks, since `gridDisk` guarantees no ordering).
+sets until it has enough fresh drivers or hits the radius cap, then ranks them by
+a naive ETA — great-circle distance over an assumed urban speed — with freshest
+heartbeat and driver id as deterministic tiebreaks (`gridDisk` guarantees no
+ordering, so something has to). ETA is monotonic in distance, so this is still
+closest-first; framing it as arrival time is what gives the offer an ETA to show.
 
 **Claim (the atomic core).** For each candidate in score order, the matcher runs
 the claim as a single Redis Lua script: verify the driver hash says `available`
@@ -131,7 +133,13 @@ count of available drivers in that cell. The multiplier is
 rider never sees a runaway price, and total (no NaN/Infinity) at zero supply. The
 read model recomputes on a tick, prunes the windows, publishes the surging cells
 to a `cell:surge` Redis hash and an in-memory snapshot the SSE stream serves. The
-pure multiplier math is unit-tested; the Redis pipeline is integration-tested.
+matcher reads that hash to price each offer: `quoteFare` lifts a flat
+base-plus-per-km fare by the pickup cell's live multiplier, priced once per
+cascade so every candidate quotes the same fare, and the offer carries both the
+price and the multiplier that produced it. Surge is a property of the ride's
+area, not the driver, so it sets the displayed fare but never reorders
+candidates. The multiplier and fare math are pure and unit-tested; the Redis
+pipeline is integration-tested.
 
 ## Rate limiting (GCRA) and its degradation
 
