@@ -106,11 +106,18 @@ describe('matcher service (testcontainers redis + postgres)', () => {
 
     const core = newCore();
     await core.start(2);
+    // Wait for what the assertions below actually depend on: the request→matched
+    // UPDATE commits several awaits BEFORE matchesTotal++ and the processing-list
+    // ack, so polling only the DB status races those two. Gate on all three.
     await waitFor(async () => {
       const res = await pool.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM ride_requests WHERE status = 'matched'`,
       );
-      return res.rows[0]?.n === 2;
+      return (
+        res.rows[0]?.n === 2 &&
+        core.metrics.matchesTotal === 2 &&
+        (await redis.llen(REQUESTS_PROCESSING)) === 0
+      );
     });
 
     const trips = await pool.query<{ request_id: string; driver_id: string }>(
