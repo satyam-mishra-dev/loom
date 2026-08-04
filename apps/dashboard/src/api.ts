@@ -13,17 +13,27 @@ export function readUrl(path: string): string {
   return `${READMODEL_URL}${path}${sep}token=${encodeURIComponent(READMODEL_TOKEN)}`;
 }
 
+// The simulator's DEFAULT_CITY is a 10km×10km box whose SW *origin* is
+// (37.7749, -122.4194); drivers fill the whole box, so the camera must aim at
+// the box centre (origin + ~5km), not the origin — otherwise the whole fleet
+// sits in the top-right and half the map is empty.
 export const CENTER = {
-  lat: Number(import.meta.env['VITE_CENTER_LAT'] ?? 37.7749),
-  lng: Number(import.meta.env['VITE_CENTER_LNG'] ?? -122.4194),
+  lat: Number(import.meta.env['VITE_CENTER_LAT'] ?? 37.8198),
+  lng: Number(import.meta.env['VITE_CENTER_LNG'] ?? -122.3626),
 };
 
 /** Deployed commit SHA (baked at build, for the authenticity footer). */
 export const COMMIT_SHA = (import.meta.env['VITE_COMMIT_SHA'] as string | undefined) ?? '';
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method: 'POST', headers: { 'content-type': 'application/json' } };
-  if (body !== undefined) init.body = JSON.stringify(body);
+  // Only send a JSON content-type when there's actually a body — otherwise
+  // Fastify rejects the empty body (FST_ERR_CTP_EMPTY_JSON_BODY). /proof and
+  // /fault/abandon-claim take no body.
+  const init: RequestInit = { method: 'POST' };
+  if (body !== undefined) {
+    init.headers = { 'content-type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
   const res = await fetch(readUrl(path), init);
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
