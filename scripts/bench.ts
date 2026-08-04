@@ -32,8 +32,11 @@ import { createRng } from '../apps/simulator/src/rng.js';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SECRET = 'bench-secret';
 const SEED = 42;
-const DRIVERS = 5_000;
-const RPS_LEVELS = [10, 25, 50, 100];
+const DRIVERS = Number(process.env['BENCH_DRIVERS'] ?? 5_000);
+// The offered-load ramp. Override to push into saturation and find the knee,
+// e.g. BENCH_RPS=25,50,100,150,200,300 BENCH_OUT=bench-saturation.json npm run bench.
+const RPS_LEVELS = (process.env['BENCH_RPS'] ?? '10,25,50,100').split(',').map(Number);
+const OUT_FILE = process.env['BENCH_OUT'] ?? 'bench-results.json';
 const DURATION_S = 12; // steady-state measurement window per level, wall seconds (speedup 1)
 // Warm-up before measuring: the fleet must be fully indexed AND every driver
 // channel subscribed on the gateway AND any cold-start offer-timeout backlog
@@ -53,6 +56,10 @@ interface LevelResult {
   p50Ms: number;
   p95Ms: number;
   p99Ms: number;
+  /** Times the partial-unique index rejected a would-be second active trip this level (must be 0). */
+  pgUniqueViolations: number;
+  /** Drivers holding >1 active trip at drain — the invariant made visible; structurally 0. */
+  doubleBookedDrivers: number;
 }
 
 interface BenchOutput {
@@ -115,12 +122,32 @@ async function main(): Promise<void> {
   const janitor = new Janitor({ redis, pool, sweepIntervalMs: 1_000 });
   janitor.start();
 
+  // Between levels the matcher and janitor keep running, so the level-reset
+  // TRUNCATE (ACCESS EXCLUSIVE on all three tables) can deadlock against an
+  // in-flight matcher/janitor TX still holding a row lock — transient, and more
+  // likely at high RPS where more TXs are in flight when the sim is killed.
+  // Retry it; a brief backoff lets those TXs drain. A harness concern only.
+  async function resetTables(): Promise<void> {
+    await redis.flushall();
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
+        return;
+      } catch (err) {
+        if (attempt >= 8) throw err;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
+  }
+
   const levels: LevelResult[] = [];
   try {
     for (const rps of RPS_LEVELS) {
       process.stderr.write(`bench: RPS ${rps} …\n`);
-      await redis.flushall();
-      await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
+      await resetTables();
+      // Snapshot the double-claim defense counter so this level's delta is
+      // isolated (the metric is cumulative across the whole run).
+      const violBefore = matcher.metrics.pgUniqueViolationsTotal;
 
       const sim = spawnSim(url, [
         '--drivers',
@@ -169,7 +196,9 @@ async function main(): Promise<void> {
           );
           return r.rows[0]?.open === 0;
         },
-        60_000,
+        // A saturated level's window requests can carry the full cascade (up to
+        // 5 offers × the 8s TTL) before terminating — give the drain room.
+        120_000,
         `drain window at rps ${rps}`,
       );
       sim.kill('SIGKILL');
@@ -193,6 +222,16 @@ async function main(): Promise<void> {
       const spanSec = DURATION_S;
       const samples = lat.rows.map((r) => Number(r.ms)).sort((a, b) => a - b);
 
+      // The invariant, MEASURED under load: the index-reject count (Redis let a
+      // double-claim slip) and any driver holding >1 active trip. Both must be 0
+      // even at the saturation collapse — the fleet may fail to match, but it
+      // never double-books.
+      const dbl = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM (
+           SELECT driver_id FROM trips WHERE status IN ('matched', 'en_route', 'in_trip')
+           GROUP BY driver_id HAVING count(*) > 1) x`,
+      );
+
       levels.push({
         rps,
         requests: matched + unmatched,
@@ -204,13 +243,14 @@ async function main(): Promise<void> {
         p50Ms: Number(percentile(samples, 0.5).toFixed(2)),
         p95Ms: Number(percentile(samples, 0.95).toFixed(2)),
         p99Ms: Number(percentile(samples, 0.99).toFixed(2)),
+        pgUniqueViolations: matcher.metrics.pgUniqueViolationsTotal - violBefore,
+        doubleBookedDrivers: dbl.rows[0]?.n ?? 0,
       });
     }
 
     // ---- geo candidate-search timing + self-heal (fleet streaming, no requests) ----
     process.stderr.write('bench: geo candidate search + self-heal …\n');
-    await redis.flushall();
-    await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
+    await resetTables();
     const geoSim = spawnSim(url, [
       '--drivers',
       String(DRIVERS),
@@ -269,7 +309,7 @@ async function main(): Promise<void> {
       selfHeal: { flushallToRebuiltMs: selfHealMs, drivers: DRIVERS },
     };
 
-    writeFileSync(new URL('./bench-results.json', import.meta.url), JSON.stringify(out, null, 2));
+    writeFileSync(new URL(`./${OUT_FILE}`, import.meta.url), JSON.stringify(out, null, 2));
     printTable(out);
   } finally {
     await janitor.stop();
@@ -294,6 +334,7 @@ function printTable(out: BenchOutput): void {
     p50ms: l.p50Ms,
     p95ms: l.p95Ms,
     p99ms: l.p99Ms,
+    'dbl-assign': l.pgUniqueViolations + l.doubleBookedDrivers,
   }));
   process.stdout.write('\n=== Loom bench — request→match latency (real stack, seeded) ===\n');
   console.table(rows);
@@ -303,7 +344,7 @@ function printTable(out: BenchOutput): void {
   process.stdout.write(
     `index self-heal after FLUSHALL: ${out.selfHeal.flushallToRebuiltMs}ms (${out.selfHeal.drivers} drivers from live pings)\n`,
   );
-  process.stdout.write('written: scripts/bench-results.json\n');
+  process.stdout.write(`written: scripts/${OUT_FILE}\n`);
 }
 
 main().then(

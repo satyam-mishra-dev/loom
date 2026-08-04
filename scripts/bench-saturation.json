@@ -1,0 +1,97 @@
+{
+  "meta": {
+    "seed": 42,
+    "drivers": 5000,
+    "durationSec": 12,
+    "at": "2026-08-04T11:36:15.870Z"
+  },
+  "levels": [
+    {
+      "rps": 50,
+      "requests": 598,
+      "matched": 598,
+      "unmatched": 0,
+      "unmatchedRate": 0,
+      "matchesPerSec": 49.8,
+      "p50Ms": 84.44,
+      "p95Ms": 191.9,
+      "p99Ms": 300.74,
+      "pgUniqueViolations": 0,
+      "doubleBookedDrivers": 0
+    },
+    {
+      "rps": 100,
+      "requests": 1198,
+      "matched": 1198,
+      "unmatched": 0,
+      "unmatchedRate": 0,
+      "matchesPerSec": 99.8,
+      "p50Ms": 131.19,
+      "p95Ms": 301.89,
+      "p99Ms": 392.02,
+      "pgUniqueViolations": 0,
+      "doubleBookedDrivers": 0
+    },
+    {
+      "rps": 150,
+      "requests": 1871,
+      "matched": 1871,
+      "unmatched": 0,
+      "unmatchedRate": 0,
+      "matchesPerSec": 155.9,
+      "p50Ms": 197.55,
+      "p95Ms": 577.9,
+      "p99Ms": 718.66,
+      "pgUniqueViolations": 0,
+      "doubleBookedDrivers": 0
+    },
+    {
+      "rps": 200,
+      "requests": 2584,
+      "matched": 2566,
+      "unmatched": 18,
+      "unmatchedRate": 0.007,
+      "matchesPerSec": 213.8,
+      "p50Ms": 349.51,
+      "p95Ms": 1817.39,
+      "p99Ms": 2010.6,
+      "pgUniqueViolations": 0,
+      "doubleBookedDrivers": 0
+    },
+    {
+      "rps": 250,
+      "requests": 3016,
+      "matched": 1767,
+      "unmatched": 1249,
+      "unmatchedRate": 0.414,
+      "matchesPerSec": 147.3,
+      "p50Ms": 2457.62,
+      "p95Ms": 3611.16,
+      "p99Ms": 3796.11,
+      "pgUniqueViolations": 0,
+      "doubleBookedDrivers": 0
+    },
+    {
+      "rps": 300,
+      "requests": 3644,
+      "matched": 1115,
+      "unmatched": 2529,
+      "unmatchedRate": 0.694,
+      "matchesPerSec": 92.9,
+      "p50Ms": 18708.13,
+      "p95Ms": 19466.26,
+      "p99Ms": 19621.1,
+      "pgUniqueViolations": 0,
+      "doubleBookedDrivers": 0
+    }
+  ],
+  "geo": {
+    "candidateSearchP50Ms": 0.59,
+    "candidateSearchP99Ms": 2.119,
+    "samples": 500
+  },
+  "selfHeal": {
+    "flushallToRebuiltMs": 206,
+    "drivers": 5000
+  }
+}

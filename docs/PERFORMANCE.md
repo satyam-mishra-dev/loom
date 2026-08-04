@@ -209,6 +209,72 @@ them.
 
 ---
 
+## Saturation — the throughput knee
+
+The optimization sweep above (RPS 10–100) maps the queuing _slope_ but never
+reaches saturation: throughput stays matched to demand the whole way. Finding
+where the fleet first stops keeping up — the knee the README flags as the
+deliberate next experiment — needs a ramp that pushes past it.
+
+**Source:** `BENCH_RPS=50,100,150,200,250,300 BENCH_OUT=bench-saturation.json npm run bench`
+— same harness, same seed (42), same 5 000-driver fleet, 8 consumers, 12 s
+warm-up + 12 s measured window per level. **Single run per level** (not
+median-of-3), on the same co-resident-loaded box as the rest of this file: read
+the _shape_, not the absolute millisecond. Full numbers in
+[`scripts/bench-saturation.json`](../scripts/bench-saturation.json).
+
+| offered RPS | matches/s | unmatched | p50 (ms) | p95 (ms) | p99 (ms) | double-assign |
+| ----------: | --------: | --------: | -------: | -------: | -------: | ------------: |
+|          50 |      49.8 |      0.0% |       84 |      192 |      301 |         **0** |
+|         100 |      99.8 |      0.0% |      131 |      302 |      392 |         **0** |
+|         150 |     155.9 |      0.0% |      198 |      578 |      719 |         **0** |
+|     **200** | **213.8** |  **0.7%** |  **350** | **1817** | **2011** |         **0** |
+|         250 |     147.3 |     41.4% |     2458 |     3611 |     3796 |         **0** |
+|         300 |      92.9 |     69.4% |    18708 |    19466 |    19621 |         **0** |
+
+**The knee sits between 200 and 250 offered RPS.** Read the throughput column,
+not the latency column — it is unambiguous:
+
+- Through **200 RPS the fleet keeps up.** matches/s tracks offered load
+  (49.8 → 99.8 → 155.9 → 213.8), unmatched stays ≤ 0.7 %, and latency, though
+  climbing, is bounded (p50 350 ms, p99 2.0 s). 200 RPS is the last healthy
+  level and the **peak sustained throughput: ~214 matches/s.**
+- At **250 RPS the system falls off the knee into congestion collapse.**
+  Offering _more_ load yields _less_ throughput — 147.3 matches/s, **below** the
+  214 delivered at 200 — 41 % of requests go unmatched, and p50 jumps to 2.5 s.
+- At **300 RPS** the collapse deepens: 92.9 matches/s, 69 % unmatched, p50
+  18.7 s. Past the knee the curve bends the wrong way.
+
+**Why it collapses there — the bottleneck.** The same one isolated below: the 8
+consumers × the offer round trip through the _single multiplexed simulator
+socket_. Below the knee, added latency is pure queue wait — service time stays
+~12 ms (§ _Where the request→match time goes_). At the knee, offers start
+stalling to the 8 s offer TTL faster than consumers free, and a stalled offer
+pins its consumer for the full 8 s. Once consumers are pinned faster than they
+drain, the effective consumer count falls, `requests:queue` backs up without
+bound, and requests exhaust their 5-offer cascade into an honest `unmatched`.
+That positive-feedback loop is exactly why throughput _drops_ past the knee
+rather than plateauing. The stall tail traces to the one WS socket standing in
+for 5 000 drivers (a harness artifact, per _Remaining bottleneck_), but the
+collapse _shape_ is what any dispatcher shows when arrival rate outruns the offer
+pipeline.
+
+**The invariant holds at saturation — measured, not asserted.** The
+`double-assign` column is **0 at every level, including the 69 %-unmatched
+collapse**: zero partial-unique-index rejections (`pgUniqueViolations`) _and_
+zero drivers ever holding more than one active trip (`doubleBookedDrivers`,
+queried straight from Postgres). Under overload the fleet degrades the safe way
+— it declines rides honestly rather than double-booking a driver. The atomic
+claim absorbs all the contention (the index never even has to fire), and
+congestion turns into `unmatched`, never into two cars for one rider.
+
+_(Harness note: at these RPS the between-level `TRUNCATE` can deadlock against a
+still-in-flight matcher/janitor TX from the prior level — an ACCESS EXCLUSIVE
+vs. row-lock race in the bench itself, not the engine; `resetTables` retries
+it.)_
+
+---
+
 ## Remaining bottleneck and honest next step
 
 **The bottleneck is queue wait, and its variance is set by the offer round

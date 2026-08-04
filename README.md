@@ -97,8 +97,12 @@ outbox row (matcher commit) — same DB clock, no synthetic stopwatch.
 This sweep shows the **queuing slope** — latency rising with offered load on a
 fixed 5,000-driver fleet — not a saturation point: it does not push RPS past the
 fleet's capacity to find the knee (throughput stays matched to demand,
-`unmatched 0%`, across all four levels). Finding where it first breaks is a
-deliberate next experiment, not a hidden result. The table above was captured on
+`unmatched 0%`, across all four levels). The saturation ramp that _does_ find the
+knee — peak ~214 matches/s at 200 RPS, congestion collapse by 250, and
+**zero double-assignment even at 69% unmatched** — is in
+[`PERFORMANCE.md` § Saturation](docs/PERFORMANCE.md#saturation--the-throughput-knee)
+(reproduce with `BENCH_RPS=50,100,150,200,250,300 BENCH_OUT=bench-saturation.json npm run bench`).
+The table above was captured on
 a quiet box; [`PERFORMANCE.md`](docs/PERFORMANCE.md) profiles where that latency goes
 (~90% is queue wait, not match logic), records a controlled before/after
 optimization pass under heavier co-resident load, and is honest about what did
