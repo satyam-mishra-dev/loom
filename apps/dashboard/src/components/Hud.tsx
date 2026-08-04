@@ -25,7 +25,9 @@ export function Hud({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
           <span className="font-hud text-[18px] font-700 tracking-wide text-fg">LOOM</span>
-          <span className="font-hud text-[11px] uppercase tracking-widest text-muted">control room</span>
+          <span className="font-hud text-[11px] uppercase tracking-widest text-muted">
+            control room
+          </span>
         </div>
         <Didactic topic="hud" />
       </div>
@@ -39,7 +41,11 @@ export function Hud({
       ) : (
         <div className="flex flex-col gap-3">
           <Stat label="Fleet online" value={counters.driversTotal.toLocaleString()} />
-          <Stat label="Active trips" value={counters.activeTrips.toLocaleString()} valueClass="text-intrip" />
+          <Stat
+            label="Active trips"
+            value={counters.activeTrips.toLocaleString()}
+            valueClass="text-intrip"
+          />
           <Stat
             label="Matches / min"
             value={Math.round(counters.matchesPerSec * 60).toLocaleString()}
@@ -85,7 +91,9 @@ function Stat({
     <div className="flex items-end justify-between gap-2">
       <div className="min-w-0">
         <div className="microlabel text-[9.5px]">{label}</div>
-        <div className={`font-mono text-[20px] font-600 leading-tight tnum ${valueClass}`}>{value}</div>
+        <div className={`font-mono text-[20px] font-600 leading-tight tnum ${valueClass}`}>
+          {value}
+        </div>
       </div>
       {spark !== undefined && <div className="shrink-0 pb-1">{spark}</div>}
     </div>

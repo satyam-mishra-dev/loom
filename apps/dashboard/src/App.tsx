@@ -76,10 +76,20 @@ export function App(): ReactElement {
   const spawn = useCallback(
     (n: number) => {
       setSpawning(true);
-      spawnRequests(n, hotspot).then(
-        (r) => toast.success(`Spawned ${r.spawned} requests`, { description: hotspot ? 'clustered into one hotspot cell' : 'scattered across the city' }),
-        () => toast.error('Spawn failed', { description: 'the read model didn’t accept the request' }),
-      ).finally(() => setSpawning(false));
+      spawnRequests(n, hotspot)
+        .then(
+          (r) =>
+            toast.success(`Spawned ${r.spawned} requests`, {
+              description: hotspot
+                ? 'clustered into one hotspot cell'
+                : 'scattered across the city',
+            }),
+          () =>
+            toast.error('Spawn failed', {
+              description: 'the read model didn’t accept the request',
+            }),
+        )
+        .finally(() => setSpawning(false));
     },
     [hotspot],
   );
@@ -89,9 +99,15 @@ export function App(): ReactElement {
     runProof().then(
       (result) => {
         setProof({ phase: 'done', result });
-        toast.success(`${result.matched} matched · ${result.unmatched} unmatched · ${result.doubleAssignments} double-assignments`);
+        toast.success(
+          `${result.matched} matched · ${result.unmatched} unmatched · ${result.doubleAssignments} double-assignments`,
+        );
       },
-      (err: unknown) => setProof({ phase: 'error', message: err instanceof Error ? err.message : 'request failed' }),
+      (err: unknown) =>
+        setProof({
+          phase: 'error',
+          message: err instanceof Error ? err.message : 'request failed',
+        }),
     );
   }, []);
 
@@ -100,10 +116,20 @@ export function App(): ReactElement {
     crashMatcher().then(
       (result) => {
         setCrash({ phase: 'done', result });
-        if (result.recovered) toast.success(`Janitor recovered in ${result.recoveryMs} ms`, { description: '0 double-assignments throughout' });
-        else toast.error('Janitor did not recover in the window', { description: 'is the matcher running?' });
+        if (result.recovered)
+          toast.success(`Janitor recovered in ${result.recoveryMs} ms`, {
+            description: '0 double-assignments throughout',
+          });
+        else
+          toast.error('Janitor did not recover in the window', {
+            description: 'is the matcher running?',
+          });
       },
-      (err: unknown) => setCrash({ phase: 'error', message: err instanceof Error ? err.message : 'request failed' }),
+      (err: unknown) =>
+        setCrash({
+          phase: 'error',
+          message: err instanceof Error ? err.message : 'request failed',
+        }),
     );
   }, []);
 

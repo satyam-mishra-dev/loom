@@ -10,15 +10,15 @@ function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got "${raw}"`);
+  if (!Number.isFinite(n) || n <= 0)
+    throw new Error(`${name} must be a positive number, got "${raw}"`);
   return n;
 }
 
 const port = envInt('PORT', 8090);
 const consumers = envInt('MATCHER_CONSUMERS', 4);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
-const databaseUrl =
-  process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
+const databaseUrl = process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 
 const log = pino({ name: 'matcher' });
 const redis = new Redis(redisUrl);
@@ -37,7 +37,12 @@ const core = new MatcherCore({
 });
 
 // Every matcher embeds a janitor; janitor-main.ts runs the same loop alone.
-const janitor = new Janitor({ redis, pool, log, sweepIntervalMs: envInt('JANITOR_SWEEP_MS', 1_000) });
+const janitor = new Janitor({
+  redis,
+  pool,
+  log,
+  sweepIntervalMs: envInt('JANITOR_SWEEP_MS', 1_000),
+});
 
 const app = Fastify({ logger: false });
 app.get('/healthz', () => ({ status: 'ok' }));

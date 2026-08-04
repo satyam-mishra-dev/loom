@@ -25,8 +25,7 @@ const button = cva(
 );
 
 export interface ButtonProps
-  extends ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof button> {}
+  extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof button> {}
 
 export function Button({ className, variant, size, ...props }: ButtonProps): ReactElement {
   return <button className={cn(button({ variant, size }), className)} {...props} />;
@@ -36,18 +35,21 @@ export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>): R
   return <div className={cn('panel text-fg', className)} {...props} />;
 }
 
-const badge = cva('inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-mono font-500 tnum', {
-  variants: {
-    tone: {
-      neutral: 'bg-fg/8 text-muted border border-line',
-      amber: 'bg-amber/12 text-amber border border-amber/40',
-      intrip: 'bg-intrip/12 text-intrip border border-intrip/40',
-      matched: 'bg-matched/12 text-matched border border-matched/40',
-      alarm: 'bg-alarm/12 text-alarm border border-alarm/40',
+const badge = cva(
+  'inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-mono font-500 tnum',
+  {
+    variants: {
+      tone: {
+        neutral: 'bg-fg/8 text-muted border border-line',
+        amber: 'bg-amber/12 text-amber border border-amber/40',
+        intrip: 'bg-intrip/12 text-intrip border border-intrip/40',
+        matched: 'bg-matched/12 text-matched border border-matched/40',
+        alarm: 'bg-alarm/12 text-alarm border border-alarm/40',
+      },
     },
+    defaultVariants: { tone: 'neutral' },
   },
-  defaultVariants: { tone: 'neutral' },
-});
+);
 
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badge> {}
 

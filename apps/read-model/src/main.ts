@@ -10,7 +10,8 @@ function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got "${raw}"`);
+  if (!Number.isFinite(n) || n <= 0)
+    throw new Error(`${name} must be a positive number, got "${raw}"`);
   return n;
 }
 function envFinite(name: string, fallback: number): number {
@@ -23,8 +24,7 @@ function envFinite(name: string, fallback: number): number {
 
 const port = envInt('PORT', 4600);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
-const databaseUrl =
-  process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
+const databaseUrl = process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 const matcherMetricsUrl = process.env['MATCHER_METRICS_URL'] ?? 'http://127.0.0.1:8090/metrics';
 
 const redis = new Redis(redisUrl);

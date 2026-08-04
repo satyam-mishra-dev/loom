@@ -155,7 +155,9 @@ describe('SIGNATURE: no double assignment', () => {
     const tripped = new Set(trips.rows.map((t) => t.driver_id));
     for (const key of await redis.keys('cell:*:available')) {
       for (const member of await redis.smembers(key)) {
-        expect(tripped.has(member), `${member} has a trip but is still available in ${key}`).toBe(false);
+        expect(tripped.has(member), `${member} has a trip but is still available in ${key}`).toBe(
+          false,
+        );
       }
     }
     for (const driverId of tripped) {

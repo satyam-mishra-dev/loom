@@ -3,7 +3,8 @@ import type { CrashResult, ProofResult, TripHistory } from './types.js';
 // The read model's URL + demo token are baked at build time (VITE_*). The token
 // gates /events + /spawn + /proof + /fault + /trip; empty = the read model runs
 // open (bare local dev).
-const READMODEL_URL = (import.meta.env['VITE_READMODEL_URL'] as string | undefined) ?? 'http://localhost:4600';
+const READMODEL_URL =
+  (import.meta.env['VITE_READMODEL_URL'] as string | undefined) ?? 'http://localhost:4600';
 const READMODEL_TOKEN = (import.meta.env['VITE_READMODEL_TOKEN'] as string | undefined) ?? '';
 
 /** Append the demo token to a read-model path. */

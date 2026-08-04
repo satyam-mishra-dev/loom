@@ -42,7 +42,10 @@ export function CrashDialog({
               </Dialog.Title>
               <Didactic topic="crash" />
             </div>
-            <Dialog.Close aria-label="Close" className="rounded-md p-1 text-muted hover:bg-fg/8 hover:text-fg">
+            <Dialog.Close
+              aria-label="Close"
+              className="rounded-md p-1 text-muted hover:bg-fg/8 hover:text-fg"
+            >
               <X size={18} />
             </Dialog.Close>
           </div>
@@ -50,8 +53,9 @@ export function CrashDialog({
           {state.phase === 'confirm' && (
             <>
               <p className="mb-2 font-body text-[13px] leading-relaxed text-fg/85">
-                This injects the exact wreckage a killed matcher leaves — a claim whose lease has lapsed and an
-                orphaned offered trip — then watches the real janitor sweep it. No matcher restart; no faked recovery.
+                This injects the exact wreckage a killed matcher leaves — a claim whose lease has
+                lapsed and an orphaned offered trip — then watches the real janitor sweep it. No
+                matcher restart; no faked recovery.
               </p>
               <p className="mb-5 font-body text-[12px] leading-relaxed text-muted">
                 It runs on an isolated cell and cleans up after itself. Live traffic is untouched.
@@ -71,7 +75,11 @@ export function CrashDialog({
             <>
               <div className="mt-2 flex flex-col gap-2.5">
                 <Step done label="Claim abandoned" detail="lease lapsed, driver still claimed" />
-                <Step done label="Trip orphaned" detail="offered trip stranded, request stuck matching" />
+                <Step
+                  done
+                  label="Trip orphaned"
+                  detail="offered trip stranded, request stuck matching"
+                />
                 <Step
                   done={result !== null && result.sweptClaim && result.driverFreed}
                   spinning={running}
@@ -109,7 +117,9 @@ export function CrashDialog({
                       <CircleCheck size={12} /> recovered, no restart
                     </Badge>
                   ) : (
-                    <Badge tone="alarm">janitor didn’t recover in window — is the matcher up?</Badge>
+                    <Badge tone="alarm">
+                      janitor didn’t recover in window — is the matcher up?
+                    </Badge>
                   )}
                   {REPO_URL === '' ? (
                     <span className="font-mono text-[11px] text-amber/80">{TEST_PATH}</span>
@@ -130,7 +140,9 @@ export function CrashDialog({
 
           {state.phase === 'error' && (
             <div className="mt-2 rounded-[10px] border border-alarm/40 bg-alarm/8 p-4">
-              <div className="font-hud text-[13px] font-600 uppercase tracking-wide text-alarm">Couldn’t inject the fault</div>
+              <div className="font-hud text-[13px] font-600 uppercase tracking-wide text-alarm">
+                Couldn’t inject the fault
+              </div>
               <p className="mt-2 font-body text-[12.5px] text-fg/80">
                 {state.message}. Check the stack is up, then try again.
               </p>
@@ -168,7 +180,9 @@ function Step({
         )}
       </span>
       <div className="min-w-0">
-        <div className="font-hud text-[12.5px] font-600 uppercase tracking-wide text-fg">{label}</div>
+        <div className="font-hud text-[12.5px] font-600 uppercase tracking-wide text-fg">
+          {label}
+        </div>
         <div className="font-body text-[11.5px] text-muted">{detail}</div>
       </div>
     </div>

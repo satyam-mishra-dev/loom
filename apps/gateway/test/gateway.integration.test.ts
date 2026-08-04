@@ -69,7 +69,9 @@ describe('gateway (testcontainers redis, real sockets)', () => {
     for (const gw of gateways.splice(0)) await gw.app.close();
   });
 
-  async function startGateway(opts: Partial<GatewayOptions> = {}): Promise<{ gw: Gateway; port: number }> {
+  async function startGateway(
+    opts: Partial<GatewayOptions> = {},
+  ): Promise<{ gw: Gateway; port: number }> {
     const gw = buildGateway({ redis, secret: SECRET, ...opts });
     gateways.push(gw);
     await gw.app.listen({ port: 0, host: '127.0.0.1' });
@@ -161,8 +163,17 @@ describe('gateway (testcontainers redis, real sockets)', () => {
     // Out of scope: pinging, replying, or reporting progress for a DIFFERENT
     // driver over the same socket is rejected — no channel hijack, no offer theft.
     ping(ws, 'victim');
-    ws.send(JSON.stringify({ type: 'offer_reply', offerId: 'o1', driverId: 'victim', accept: true }));
-    ws.send(JSON.stringify({ type: 'trip_progress', tripId: 't1', driverId: 'victim', event: 'arrived_pickup' }));
+    ws.send(
+      JSON.stringify({ type: 'offer_reply', offerId: 'o1', driverId: 'victim', accept: true }),
+    );
+    ws.send(
+      JSON.stringify({
+        type: 'trip_progress',
+        tripId: 't1',
+        driverId: 'victim',
+        event: 'arrived_pickup',
+      }),
+    );
 
     await waitFor(() => gw.metrics.scopeRejectsTotal === 3);
     expect(gw.driverSockets.has('victim')).toBe(false);
@@ -214,7 +225,10 @@ describe('gateway (testcontainers redis, real sockets)', () => {
     const { gw, port } = await startGateway({ pingIntervalMs: 100, pongTimeoutMs: 200 });
     const ws = await connect(port, signToken('d1', SECRET));
     pauseClient(ws); // never processes the server ping ⇒ never pongs
-    await waitFor(() => gw.metrics.pongTimeoutsTotal >= 1 && gw.metrics.wsConnectionsActive === 0, 3000);
+    await waitFor(
+      () => gw.metrics.pongTimeoutsTotal >= 1 && gw.metrics.wsConnectionsActive === 0,
+      3000,
+    );
     expect(gw.driverSockets.size).toBe(0);
   });
 
@@ -280,7 +294,14 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       const pttl = await redis.pttl(offerReplyKey('o1'));
       expect(pttl).toBeGreaterThan(0); // GCs itself if no matcher ever collects it
 
-      ws.send(JSON.stringify({ type: 'trip_progress', tripId: 't1', driverId: 'd1', event: 'arrived_pickup' }));
+      ws.send(
+        JSON.stringify({
+          type: 'trip_progress',
+          tripId: 't1',
+          driverId: 'd1',
+          event: 'arrived_pickup',
+        }),
+      );
       await waitFor(() => gw.metrics.tripProgressTotal === 1);
       expect(await redis.lrange(TRIP_EVENTS_QUEUE, 0, -1)).toEqual([
         JSON.stringify({ tripId: 't1', driverId: 'd1', event: 'arrived_pickup' }),
@@ -288,7 +309,14 @@ describe('gateway (testcontainers redis, real sockets)', () => {
 
       // Malformed variants are counted invalid, not forwarded.
       ws.send(JSON.stringify({ type: 'offer_reply', offerId: 'o2', accept: 'yes' }));
-      ws.send(JSON.stringify({ type: 'trip_progress', tripId: 't1', driverId: 'd1', event: 'teleported' }));
+      ws.send(
+        JSON.stringify({
+          type: 'trip_progress',
+          tripId: 't1',
+          driverId: 'd1',
+          event: 'teleported',
+        }),
+      );
       await waitFor(() => gw.metrics.invalidMessagesTotal === 2);
       expect(await redis.exists(offerReplyKey('o2'))).toBe(0);
       expect(await redis.llen(TRIP_EVENTS_QUEUE)).toBe(1);
@@ -314,7 +342,11 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       await pool.query('TRUNCATE ride_requests, trips CASCADE');
     });
 
-    function request(ws: WebSocket, requestId: string, dest?: { destLat: number; destLng: number }): void {
+    function request(
+      ws: WebSocket,
+      requestId: string,
+      dest?: { destLat: number; destLng: number },
+    ): void {
       ws.send(JSON.stringify({ type: 'ride_request', requestId, ...CENTER, ...dest, ts: 0 }));
     }
 
@@ -330,9 +362,12 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       expect(gw.metrics.rideRequestErrorsTotal).toBe(0);
 
       // Exactly one row per request id, pending, at the request's coordinates.
-      const rows = await pool.query<{ id: string; status: string; lat: number; dest_lat: number | null }>(
-        'SELECT id, status, lat, dest_lat FROM ride_requests ORDER BY id',
-      );
+      const rows = await pool.query<{
+        id: string;
+        status: string;
+        lat: number;
+        dest_lat: number | null;
+      }>('SELECT id, status, lat, dest_lat FROM ride_requests ORDER BY id');
       expect(rows.rows).toEqual([
         { id: 'r1', status: 'pending', lat: CENTER.lat, dest_lat: 37.8 },
         { id: 'r2', status: 'pending', lat: CENTER.lat, dest_lat: null },
@@ -380,7 +415,11 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       const ws = await connect(port, signToken('rider', SECRET));
       const rejected: string[] = [];
       ws.on('message', (data: Buffer) => {
-        const m = JSON.parse(String(data)) as { type?: string; requestId?: string; reason?: string };
+        const m = JSON.parse(String(data)) as {
+          type?: string;
+          requestId?: string;
+          reason?: string;
+        };
         if (m.type === 'ride_rejected' && m.requestId !== undefined) rejected.push(m.requestId);
       });
 

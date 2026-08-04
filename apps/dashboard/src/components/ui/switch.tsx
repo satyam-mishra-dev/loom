@@ -19,7 +19,11 @@ export function Switch(props: {
         'data-[state=unchecked]:border-line data-[state=unchecked]:bg-fg/8',
         'data-[state=checked]:border-amber/60 data-[state=checked]:bg-amber/25',
       )}
-      style={props.checked && props.color !== undefined ? { borderColor: props.color, background: `${props.color}33` } : undefined}
+      style={
+        props.checked && props.color !== undefined
+          ? { borderColor: props.color, background: `${props.color}33` }
+          : undefined
+      }
     >
       <SwitchPrimitive.Thumb
         className="pointer-events-none block h-3 w-3 translate-x-[3px] rounded-full bg-muted shadow-sm transition-transform duration-150 data-[state=checked]:translate-x-[15px]"

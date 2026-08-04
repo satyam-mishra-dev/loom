@@ -29,8 +29,20 @@ export function Sparkline({
   return (
     <svg width={width} height={height} aria-hidden="true" className="overflow-visible">
       <path d={area} fill={color} opacity={0.12} />
-      <path d={d} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={width} cy={height - 2 - ((data[data.length - 1]! - min) / span) * (height - 4)} r={1.8} fill={color} />
+      <path
+        d={d}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle
+        cx={width}
+        cy={height - 2 - ((data[data.length - 1]! - min) / span) * (height - 4)}
+        r={1.8}
+        fill={color}
+      />
     </svg>
   );
 }

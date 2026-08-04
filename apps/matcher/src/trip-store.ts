@@ -137,7 +137,11 @@ export class TripStore {
           // chain starts at requested even though the row starts at offered.
           let state = initialTripState();
           state = transition(state, { type: 'MATCHING_STARTED' });
-          state = transition(state, { type: 'OFFER_SENT', driverId: args.driverId, offerId: args.offerId });
+          state = transition(state, {
+            type: 'OFFER_SENT',
+            driverId: args.driverId,
+            offerId: args.offerId,
+          });
           await client.query(
             `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token, offer_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -162,7 +166,11 @@ export class TripStore {
               args.tripId,
               JSON.stringify({ requestId: args.requestId }),
               JSON.stringify({ event: 'MATCHING_STARTED' }),
-              JSON.stringify({ event: 'OFFER_SENT', driverId: args.driverId, offerId: args.offerId }),
+              JSON.stringify({
+                event: 'OFFER_SENT',
+                driverId: args.driverId,
+                offerId: args.offerId,
+              }),
             ],
           );
           return true;
@@ -196,7 +204,11 @@ export class TripStore {
    * driver already has an active trip); 'lost' means the offer or request is
    * no longer ours.
    */
-  async acceptOffer(args: { tripId: string; offerId: string; requestId: string }): Promise<AcceptResult> {
+  async acceptOffer(args: {
+    tripId: string;
+    offerId: string;
+    requestId: string;
+  }): Promise<AcceptResult> {
     try {
       return await this.inTx(async (client) => {
         const row = await this.lockTrip(client, args.tripId);
@@ -204,7 +216,10 @@ export class TripStore {
           throw new LostOwnership();
         }
         const next = transition(rowState(row), { type: 'OFFER_ACCEPTED' });
-        await client.query('UPDATE trips SET status = $2 WHERE id = $1', [args.tripId, next.status]);
+        await client.query('UPDATE trips SET status = $2 WHERE id = $1', [
+          args.tripId,
+          next.status,
+        ]);
         const req = await client.query(
           `UPDATE ride_requests SET status = 'matched', matched_trip_id = $2
            WHERE id = $1 AND status = 'matching'`,
@@ -293,7 +308,11 @@ export class TripStore {
    * late, spoofed, or illegal). The caller retries premature events; a dropped
    * one would strand the trip 'in_trip' and the driver 'on_trip' forever.
    */
-  async progress(tripId: string, driverId: string, event: 'arrived_pickup' | 'trip_done'): Promise<ProgressOutcome> {
+  async progress(
+    tripId: string,
+    driverId: string,
+    event: 'arrived_pickup' | 'trip_done',
+  ): Promise<ProgressOutcome> {
     return this.inTx(async (client) => {
       const row = await this.lockTrip(client, tripId);
       if (row === null) return 'terminal'; // no such trip — nothing to retry
@@ -307,7 +326,10 @@ export class TripStore {
         event === 'arrived_pickup' ? { type: 'ARRIVED_PICKUP' } : { type: 'TRIP_DONE' };
       const next = transition(rowState(row), machineEvent);
       await client.query('UPDATE trips SET status = $2 WHERE id = $1', [tripId, next.status]);
-      await this.insertEvent(client, tripId, next.status, { event: machineEvent.type, driverId: row.driver_id });
+      await this.insertEvent(client, tripId, next.status, {
+        event: machineEvent.type,
+        driverId: row.driver_id,
+      });
       return 'applied';
     });
   }
@@ -338,14 +360,18 @@ export class TripStore {
           by: 'janitor',
         });
         if (requestStatus === 'matching') {
-          await client.query(`UPDATE ride_requests SET status = 'pending' WHERE id = $1`, [row.request_id]);
+          await client.query(`UPDATE ride_requests SET status = 'pending' WHERE id = $1`, [
+            row.request_id,
+          ]);
         }
         return row.request_id;
       }
       if (row.status === 'matching' && requestStatus === 'matching') {
         // Dead matcher crashed between reverting the trip and continuing the
         // cascade; nobody owns the request anymore — hand it back.
-        await client.query(`UPDATE ride_requests SET status = 'pending' WHERE id = $1`, [row.request_id]);
+        await client.query(`UPDATE ride_requests SET status = 'pending' WHERE id = $1`, [
+          row.request_id,
+        ]);
         return row.request_id;
       }
       return null; // matched/en_route/in_trip/…: the trip is live, leave it alone

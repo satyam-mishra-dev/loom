@@ -41,13 +41,21 @@ export function LayerToggles({
     didactic?: 'surge' | 'cells';
   }): ReactElement => (
     <div className="flex items-center justify-between gap-4 py-1">
-      <label htmlFor={`layer-${id}`} className="flex cursor-pointer items-center gap-2 text-[13px] text-fg/90">
+      <label
+        htmlFor={`layer-${id}`}
+        className="flex cursor-pointer items-center gap-2 text-[13px] text-fg/90"
+      >
         <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
         {label}
       </label>
       <div className="flex items-center gap-1.5">
         {didactic !== undefined && <Didactic topic={didactic} />}
-        <Switch id={`layer-${id}`} checked={on} color={color} onCheckedChange={(v) => onChange({ ...layers, [id]: v })} />
+        <Switch
+          id={`layer-${id}`}
+          checked={on}
+          color={color}
+          onCheckedChange={(v) => onChange({ ...layers, [id]: v })}
+        />
       </div>
     </div>
   );

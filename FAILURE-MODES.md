@@ -11,8 +11,8 @@ proves it. This file is the point of the project as much as the happy path is.
 available sets, the heartbeat ZSET — plus claim keys and offer reply lists. A
 restart or `FLUSHALL` erases all of it.
 
-**What happens.** Nothing that matters is lost, because the index is *operational
-state derived from a live stream*, not a source of truth. Drivers keep pinging at
+**What happens.** Nothing that matters is lost, because the index is _operational
+state derived from a live stream_, not a source of truth. Drivers keep pinging at
 ~1 Hz; each ping's atomic apply re-`SADD`s the driver into its cell and re-writes
 its hash, so the index refills itself. `SADD`/`HSET` are idempotent, so the
 rebuild needs no coordination. Trips already committed live in Postgres and are
@@ -24,7 +24,7 @@ batch measures **~69 ms** (65–79 ms across runs,
 `packages/core/test/geo-index.integration.test.ts`, which `FLUSHALL`s and asserts
 the index returns whole). Under a live 5,000-driver stream, the bench wipes the
 keyspace and times the return to a whole index at **203 ms**
-(`npm run bench`). This "the index heals from the stream" property is *why* the
+(`npm run bench`). This "the index heals from the stream" property is _why_ the
 partial-unique index in Postgres exists — Redis being disposable is a feature, so
 truth cannot live only there.
 
@@ -38,7 +38,7 @@ between reverting an offer and continuing the cascade. Without recovery, that
 driver is stranded `claimed` forever and the request never completes.
 
 **What happens.** The claim's expiry lives in the data — `expiresAt` in the claim
-value, indexed in the `claims:by-expiry` ZSET — so the claim is *observably dead*
+value, indexed in the `claims:by-expiry` ZSET — so the claim is _observably dead_
 the moment its deadline passes, regardless of which process died. The janitor
 (embedded in every matcher, or standalone) sweeps the ZSET, re-reads each due
 claim under a Lua script, and for a genuinely expired one deletes it, returns the
@@ -52,7 +52,7 @@ can never free a driver while an accept is still in flight. Two backstops close
 the residual holes: (a) if Redis lets a double-claim slip through, the accept's
 `23505` is caught, the trip is reverted `offered → matching`, and the cascade
 continues to the next candidate (never stranding on the conflicting driver);
-(b) the startup reaper re-enqueues requests stuck past a grace window in *both*
+(b) the startup reaper re-enqueues requests stuck past a grace window in _both_
 `pending` **and** `matching` — for a `matching` row with a trip it first reverts
 the trip and hands the request back to `pending`, so a request abandoned
 mid-cascade by a dead matcher (or a past-grace janitor repair) is recovered even
@@ -76,11 +76,11 @@ app is dead.
 
 **What happens.** Two independent liveness layers catch it. At the transport
 level the gateway sends a server ping on an interval and terminates the socket if
-no pong arrives within the pong timeout — that catches dead *links*, including
+no pong arrives within the pong timeout — that catches dead _links_, including
 half-open TCP that never delivers a FIN. At the application level, a driver that
 stops sending position pings goes stale: the heartbeat sweep (a `ZRANGEBYSCORE`
 over the heartbeat ZSET) removes it from its available set and marks it
-`offline`, so it cannot be matched — that catches dead *drivers* whose socket is
+`offline`, so it cannot be matched — that catches dead _drivers_ whose socket is
 somehow still open. The two are deliberately separate: a swept driver on a live
 socket comes straight back by pinging again, and a zombie socket that pings
 nothing cannot stay matchable. An in-flight trip's row is untouched by either; if
@@ -127,14 +127,14 @@ in hotspot cells) show the same thing at fleet scale.
 
 **What happens.** Claims still expire — that is the whole point of putting the
 expiry in the data. `expiresAt` in the claim value and the `claims:by-expiry`
-ZSET score make a claim *dead the moment its deadline passes*, with no process
+ZSET score make a claim _dead the moment its deadline passes_, with no process
 involved; a dead claim is observable by anyone who looks. Every matcher embeds
 the same sweep loop, so as long as one matcher is alive, expired claims are
-swept. If *every* sweeper is down past the claim key's grace TTL, Redis's own
+swept. If _every_ sweeper is down past the claim key's grace TTL, Redis's own
 `PX` net eventually erases the key; the next janitor to wake finds the key gone,
 still cleans the ZSET entry, and repairs a driver stuck `claimed`. Because the
 erased value took the `tripId` with it, that branch then looks the driver's
-orphaned `offered` trip up *by driver id*, reverts it `offered → matching`, and
+orphaned `offered` trip up _by driver id_, reverts it `offered → matching`, and
 re-enqueues its request immediately — no wait for a process restart. (Earlier
 this branch left the trip stuck `offered` and its request stuck `matching`
 forever; the startup reaper broadening to `status IN ('pending','matching')` is
@@ -155,10 +155,10 @@ cover the Lua re-check semantics (`live`/`released`/`gone`).
 **What breaks.** The limiter's own store is unreachable or slow.
 
 **What happens.** `DegradingLimiter` wraps the Redis GCRA call in a short timeout
-and routes both errors *and* slowness to an in-process approximate GCRA over a
+and routes both errors _and_ slowness to an in-process approximate GCRA over a
 bounded Map — the same pure arithmetic, per-instance and approximate. By default
 this is **fail-open**: the service was fine, and rejecting all traffic because the
-*limiter's* dependency died would invert the priority. A `RATE_LIMIT_FAIL_CLOSED`
+_limiter's_ dependency died would invert the priority. A `RATE_LIMIT_FAIL_CLOSED`
 flag flips it to reject-on-outage for cases where the limit is the product
 (billing, hard security throttles). On recovery the local counts are discarded,
 not merged — a brief over-admission window accepted by design. The fallback's
@@ -177,7 +177,7 @@ rejects over-limit requests with a 429-equivalent and counts them.
 ## A token tries to act for a driver it doesn't own (channel hijack)
 
 **What breaks.** A `driver_ping`, `offer_reply`, or `trip_progress` carries a
-`driverId` in its payload. Without a check, any socket with a *valid* token
+`driverId` in its payload. Without a check, any socket with a _valid_ token
 could send messages for **another** driver's id — overwriting that driver's
 position, binding its offer channel to the attacker's socket (stealing rider
 pickup PII and its offers), or accepting/declining an offer that isn't theirs.
@@ -190,7 +190,7 @@ before it can bind a channel or enqueue. The trust model is explicit: the
 simulator connects as `fleet:sim` and multiplexes all drivers over one socket —
 that is a **fleet edge aggregating a fleet's GPS**, exactly like a real dispatch
 gateway ingesting from a carrier's telematics box. The fleet token is trusted to
-speak for its fleet; it is *not* a substitute for per-device driver auth, which
+speak for its fleet; it is _not_ a substitute for per-device driver auth, which
 is the production upgrade path (a signed per-driver credential minted at device
 enrolment, so the gateway need not trust the aggregator blindly). See
 DECISIONS.md.
@@ -207,12 +207,12 @@ fleet through the E2E path.
 **What breaks.** Trip progress is `en_route → in_trip → completed`, driven by two
 driver-reported events (`arrived_pickup`, then `trip_done`). With more than one
 matcher instance, the trip-progress consumers can split a single trip's two
-events across instances and process `trip_done` *before* `arrived_pickup` lands.
+events across instances and process `trip_done` _before_ `arrived_pickup` lands.
 The `trip_done` transition is then illegal (the trip is still `en_route`).
 Dropping it would strand the trip `in_trip` and the driver `on_trip` forever.
 
 **What happens.** The store distinguishes a **premature** event (its predecessor
-hasn't committed — the current status is *earlier* than the transition's required
+hasn't committed — the current status is _earlier_ than the transition's required
 source) from a **terminal** one (a duplicate, late, spoofed, or genuinely-illegal
 event). A premature event is **not** acked: it is re-queued after a short backoff
 so the predecessor commits first, then retried until it applies. A terminal event
@@ -253,12 +253,12 @@ and `/events` reject a missing/wrong token (401) and accept the right one, while
 This one is real, and it is the reason the two-layer claim defense exists in the
 shape it does.
 
-The geo index originally applied a batch of pings by *reading* each driver's
+The geo index originally applied a batch of pings by _reading_ each driver's
 status in a pipeline, deciding in application code whether the driver was
 `available`, and then writing the new position and set membership in a `MULTI`.
 That read-then-write had a window. With the phase-D offer cascade holding a claim
 for whole seconds while position pings streamed in continuously, a matcher's
-claim (`SREM` from the available set, status → `claimed`) could land *between* the
+claim (`SREM` from the available set, status → `claimed`) could land _between_ the
 ping's read of `status='available'` and its write — and the write would clobber
 the just-claimed driver straight back to `available` and re-`SADD` it into the
 cell. One driver, now claimable twice.
@@ -273,7 +273,7 @@ with it, the bug was a metric.
 
 The fix was to make one ping's apply a single atomic Lua script: the status check
 and the writes it guards are one uninterruptible step, and a driver whose status
-is `claimed` or `on_trip` gets a position/heartbeat update *only* — the script
+is `claimed` or `on_trip` gets a position/heartbeat update _only_ — the script
 can never move it back into an available set. The signature test now asserts
 `pgUniqueViolationsTotal === 0` on every run, so the index stays the silent
 backstop it is meant to be, and a regression that reintroduces the race would

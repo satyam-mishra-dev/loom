@@ -30,7 +30,11 @@ export class Hist {
 }
 
 /** Prometheus text-format lines for a counter/gauge. */
-export function renderCounter(name: string, value: number, type: 'counter' | 'gauge' = 'counter'): string[] {
+export function renderCounter(
+  name: string,
+  value: number,
+  type: 'counter' | 'gauge' = 'counter',
+): string[] {
   return [`# TYPE ${name} ${type}`, `${name} ${value}`];
 }
 

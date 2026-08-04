@@ -52,13 +52,17 @@ export function ProofOverlay({
               </Dialog.Title>
               <Didactic topic="proof" />
             </div>
-            <Dialog.Close aria-label="Close" className="rounded-md p-1 text-muted hover:bg-fg/8 hover:text-fg">
+            <Dialog.Close
+              aria-label="Close"
+              className="rounded-md p-1 text-muted hover:bg-fg/8 hover:text-fg"
+            >
               <X size={18} />
             </Dialog.Close>
           </div>
           <p className="mb-4 font-body text-[12.5px] leading-relaxed text-muted">
-            200 concurrent requests converge on one cell holding 20 drivers, fired through the real matcher on the
-            live sandbox. Exactly 20 lock, the rest go honestly unmatched, nobody double-books.
+            200 concurrent requests converge on one cell holding 20 drivers, fired through the real
+            matcher on the live sandbox. Exactly 20 lock, the rest go honestly unmatched, nobody
+            double-books.
           </p>
 
           {state.phase === 'error' ? (
@@ -68,8 +72,20 @@ export function ProofOverlay({
               {!reduced && <DotField running={state.phase === 'running'} />}
 
               <div className="mt-4 grid grid-cols-3 gap-2">
-                <Tally value={done ? matched : 0} total={MATCHED} label="matched" tone="matched" pending={!done} />
-                <Tally value={done ? unmatched : 0} total={DOTS - MATCHED} label="unmatched" tone="muted" pending={!done} />
+                <Tally
+                  value={done ? matched : 0}
+                  total={MATCHED}
+                  label="matched"
+                  tone="matched"
+                  pending={!done}
+                />
+                <Tally
+                  value={done ? unmatched : 0}
+                  total={DOTS - MATCHED}
+                  label="unmatched"
+                  tone="muted"
+                  pending={!done}
+                />
                 <Tally
                   value={result?.doubleAssignments ?? 0}
                   total={0}
@@ -93,7 +109,9 @@ export function ProofOverlay({
 
               <div className="mt-4 flex items-center justify-between">
                 <span className="microlabel text-[9.5px]">
-                  {state.phase === 'running' ? 'firing 200 concurrent requests…' : 'the same scenario CI asserts'}
+                  {state.phase === 'running'
+                    ? 'firing 200 concurrent requests…'
+                    : 'the same scenario CI asserts'}
                 </span>
                 <TestLink />
               </div>
@@ -126,7 +144,10 @@ function DotField({ running }: { running: boolean }): ReactElement {
                       animation: `fl-streak 900ms ease-out ${(i % 25) * 12}ms both`,
                     } as Record<string, string>)
                   : isMatched
-                    ? { boxShadow: '0 0 0 0 rgba(126,224,163,0.5)', animation: 'fl-pulse 1.4s ease-out 1' }
+                    ? {
+                        boxShadow: '0 0 0 0 rgba(126,224,163,0.5)',
+                        animation: 'fl-pulse 1.4s ease-out 1',
+                      }
                     : {}),
               }}
             />
@@ -152,10 +173,13 @@ function Tally({
   pending: boolean;
   fixed?: boolean;
 }): ReactElement {
-  const color = tone === 'matched' ? 'text-matched' : tone === 'alarm' ? 'text-alarm' : 'text-muted';
+  const color =
+    tone === 'matched' ? 'text-matched' : tone === 'alarm' ? 'text-alarm' : 'text-muted';
   return (
     <div className="rounded-[10px] border border-line bg-ground/40 px-3 py-2.5 text-center">
-      <div className={`font-mono text-[26px] font-600 leading-none tnum ${pending ? 'text-fg/25' : color}`}>
+      <div
+        className={`font-mono text-[26px] font-600 leading-none tnum ${pending ? 'text-fg/25' : color}`}
+      >
         {pending ? (fixed ? '·' : '—') : value}
       </div>
       <div className="mt-1.5 microlabel text-[8.5px] leading-tight">{label}</div>
@@ -167,10 +191,12 @@ function Tally({
 function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void }): ReactElement {
   return (
     <div className="rounded-[10px] border border-alarm/40 bg-alarm/8 p-4">
-      <div className="font-hud text-[13px] font-600 uppercase tracking-wide text-alarm">Proof didn’t run</div>
+      <div className="font-hud text-[13px] font-600 uppercase tracking-wide text-alarm">
+        Proof didn’t run
+      </div>
       <p className="mt-2 font-body text-[12.5px] text-fg/80">
-        {message}. The read model may be starting up or the token may be wrong — check the stack is up, then run it
-        again.
+        {message}. The read model may be starting up or the token may be wrong — check the stack is
+        up, then run it again.
       </p>
       <Button className="mt-3" variant="primary" size="sm" onClick={onRetry}>
         Try again

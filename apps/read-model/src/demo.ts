@@ -46,7 +46,11 @@ export interface Deps {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** A cell far enough from the live fleet that its candidate search is ours alone. */
-function isolatedCell(center: { lat: number; lng: number }, dLat: number, dLng: number): {
+function isolatedCell(
+  center: { lat: number; lng: number },
+  dLat: number,
+  dLng: number,
+): {
   cell: string;
   lat: number;
   lng: number;
@@ -230,7 +234,13 @@ export async function injectAbandonedClaim(deps: Deps): Promise<CrashHandle> {
   // Claim through the REAL Lua with a normal (future) lease first, so the
   // janitor can't sweep it before the orphaned trip row exists.
   const claims = new ClaimStore(redis);
-  const token = await claims.claimDriver(driverId, tripId, now, DEFAULT_STALE_MS, DEFAULT_CLAIM_TTL_MS);
+  const token = await claims.claimDriver(
+    driverId,
+    tripId,
+    now,
+    DEFAULT_STALE_MS,
+    DEFAULT_CLAIM_TTL_MS,
+  );
   if (token === null) throw new Error('could not seed the abandoned claim (driver not claimable)');
 
   await pool.query(
@@ -273,7 +283,10 @@ export async function crashSnapshot(deps: Deps, h: CrashHandle): Promise<CrashSn
        GROUP BY driver_id HAVING count(*) > 1`,
       [h.driverId],
     ),
-    pool.query(`SELECT 1 FROM trip_events WHERE trip_id = $1 AND payload->>'by' = 'janitor' LIMIT 1`, [h.tripId]),
+    pool.query(
+      `SELECT 1 FROM trip_events WHERE trip_id = $1 AND payload->>'by' = 'janitor' LIMIT 1`,
+      [h.tripId],
+    ),
   ]);
   return {
     claimPresent: claimPresent === 1,
@@ -326,7 +339,17 @@ export async function runCrashDemo(deps: Deps, timeoutMs = 18_000): Promise<Cras
   } finally {
     await cleanupCrash(deps, handle).catch(() => undefined);
   }
-  return { ...handle, before, after, recovered, recoveryMs, invariantBreaches, sweptClaim, driverFreed, orphanCleared };
+  return {
+    ...handle,
+    before,
+    after,
+    recovered,
+    recoveryMs,
+    invariantBreaches,
+    sweptClaim,
+    driverFreed,
+    orphanCleared,
+  };
 }
 
 /** Remove all traces of a crash fault (queue entries + PG rows + Redis keys). */
@@ -341,7 +364,10 @@ export async function cleanupCrash(deps: Deps, h: CrashHandle): Promise<void> {
     [h.requestId, h.driverId],
   );
   await pool.query('UPDATE ride_requests SET matched_trip_id = NULL WHERE id = $1', [h.requestId]);
-  await pool.query('DELETE FROM trips WHERE request_id = $1 OR driver_id = $2', [h.requestId, h.driverId]);
+  await pool.query('DELETE FROM trips WHERE request_id = $1 OR driver_id = $2', [
+    h.requestId,
+    h.driverId,
+  ]);
   await pool.query('DELETE FROM ride_requests WHERE id = $1', [h.requestId]);
   const pipe = redis.pipeline();
   pipe.del(driverKey(h.driverId));
@@ -428,7 +454,11 @@ export async function tripHistory(deps: Deps, tripId: string): Promise<TripHisto
   const byOfferId = new Map<string, OfferAttempt>();
   for (const e of ev.rows) {
     const p = e.payload;
-    if (p.event === 'OFFER_SENT' && typeof p.offerId === 'string' && typeof p.driverId === 'string') {
+    if (
+      p.event === 'OFFER_SENT' &&
+      typeof p.offerId === 'string' &&
+      typeof p.driverId === 'string'
+    ) {
       const attempt: OfferAttempt = { driverId: p.driverId, offerId: p.offerId, result: 'pending' };
       offers.push(attempt);
       byOfferId.set(p.offerId, attempt);
@@ -451,7 +481,10 @@ export async function tripHistory(deps: Deps, tripId: string): Promise<TripHisto
     driverId: row.driver_id,
     requestId: row.request_id,
     rider: { lat: row.rider_lat, lng: row.rider_lng },
-    dest: row.dest_lat === null || row.dest_lng === null ? null : { lat: row.dest_lat, lng: row.dest_lng },
+    dest:
+      row.dest_lat === null || row.dest_lng === null
+        ? null
+        : { lat: row.dest_lat, lng: row.dest_lng },
     surgeMultiplier: Number.isFinite(surge) ? surge : 1,
     createdAt: row.created_at.toISOString(),
     events: ev.rows.map((e) => ({
@@ -465,13 +498,20 @@ export async function tripHistory(deps: Deps, tripId: string): Promise<TripHisto
 
 // ---------------------------------------------------------------------------
 
-async function cleanupByIds(deps: Deps, requestIds: string[], driverIds: string[], cell: string): Promise<void> {
+async function cleanupByIds(
+  deps: Deps,
+  requestIds: string[],
+  driverIds: string[],
+  cell: string,
+): Promise<void> {
   const { redis, pool } = deps;
   await pool.query(
     'DELETE FROM trip_events WHERE trip_id IN (SELECT id FROM trips WHERE request_id = ANY($1))',
     [requestIds],
   );
-  await pool.query('UPDATE ride_requests SET matched_trip_id = NULL WHERE id = ANY($1)', [requestIds]);
+  await pool.query('UPDATE ride_requests SET matched_trip_id = NULL WHERE id = ANY($1)', [
+    requestIds,
+  ]);
   await pool.query('DELETE FROM trips WHERE request_id = ANY($1)', [requestIds]);
   await pool.query('DELETE FROM ride_requests WHERE id = ANY($1)', [requestIds]);
   const pipe = redis.pipeline();

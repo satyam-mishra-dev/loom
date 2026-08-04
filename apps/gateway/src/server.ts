@@ -94,7 +94,12 @@ type InboundMessage =
       destLng: number | null;
     }
   | { kind: 'offer_reply'; offerId: string; driverId: string; accept: boolean }
-  | { kind: 'trip_progress'; tripId: string; driverId: string; event: 'arrived_pickup' | 'trip_done' };
+  | {
+      kind: 'trip_progress';
+      tripId: string;
+      driverId: string;
+      event: 'arrived_pickup' | 'trip_done';
+    };
 
 // Coordinate guards at the trust boundary: finiteness is NOT enough. h3-js's
 // latLngToCell silently WRAPS an out-of-range coordinate into a valid cell
@@ -135,7 +140,8 @@ function parseMessage(raw: unknown): InboundMessage | null {
     }
     case 'offer_reply': {
       const { offerId, driverId, accept } = msg;
-      if (!nonEmptyString(offerId) || !nonEmptyString(driverId) || typeof accept !== 'boolean') return null;
+      if (!nonEmptyString(offerId) || !nonEmptyString(driverId) || typeof accept !== 'boolean')
+        return null;
       return { kind: 'offer_reply', offerId, driverId, accept };
     }
     case 'trip_progress': {
@@ -271,7 +277,13 @@ export function buildGateway(opts: GatewayOptions): Gateway {
   async function rateLimitedIntake(
     source: string,
     socket: WebSocket,
-    msg: { requestId: string; lat: number; lng: number; destLat: number | null; destLng: number | null },
+    msg: {
+      requestId: string;
+      lat: number;
+      lng: number;
+      destLat: number | null;
+      destLng: number | null;
+    },
   ): Promise<void> {
     const decision = await limiter.limit(`intake:${source}`);
     if (!decision.allowed) {
@@ -309,7 +321,11 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  async function forwardTripProgress(tripId: string, driverId: string, event: string): Promise<void> {
+  async function forwardTripProgress(
+    tripId: string,
+    driverId: string,
+    event: string,
+  ): Promise<void> {
     try {
       await redis.lpush(TRIP_EVENTS_QUEUE, JSON.stringify({ tripId, driverId, event }));
       metrics.tripProgressTotal++;

@@ -1,11 +1,5 @@
 import type { SimMessage } from '@loom/core';
-import {
-  assignTrip,
-  createAgents,
-  noisyPing,
-  tickAgent,
-  type DriverAgent,
-} from './agents.js';
+import { assignTrip, createAgents, noisyPing, tickAgent, type DriverAgent } from './agents.js';
 import { createHotspots, generateRequests, type HotspotOptions } from './generator.js';
 import { createRng, type Rng } from './rng.js';
 import { DEFAULT_CITY, fromLatLng, toLatLng, type City, type Point } from './world.js';
@@ -84,13 +78,29 @@ export class Simulation {
       const ping = noisyPing(this.city, agent, this.rng, this.gpsNoiseStdDevM);
       const { lat, lng } = toLatLng(this.city, ping);
       const status =
-        agent.mode === 'to_pickup' ? 'en_route' : agent.mode === 'to_dest' ? 'in_trip' : 'available';
+        agent.mode === 'to_pickup'
+          ? 'en_route'
+          : agent.mode === 'to_dest'
+            ? 'in_trip'
+            : 'available';
       out.push({ type: 'driver_ping', driverId: agent.id, lat, lng, ts, status });
       if (arrival !== null) {
-        out.push({ type: 'trip_progress', tripId: arrival.tripId, driverId: agent.id, event: arrival.event, ts });
+        out.push({
+          type: 'trip_progress',
+          tripId: arrival.tripId,
+          driverId: agent.id,
+          event: arrival.event,
+          ts,
+        });
       }
     }
-    const requests = generateRequests(this.city, this.rng, this.ratePerSec, dtSec, this.hotspotOpts);
+    const requests = generateRequests(
+      this.city,
+      this.rng,
+      this.ratePerSec,
+      dtSec,
+      this.hotspotOpts,
+    );
     requests.forEach((pt, i) => {
       const { lat, lng } = toLatLng(this.city, pt);
       // Destination: uniform over the city, drawn from the main stream.

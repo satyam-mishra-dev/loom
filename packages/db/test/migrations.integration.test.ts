@@ -29,7 +29,12 @@ describe('migrations (testcontainers postgres)', () => {
     await pool.query(`INSERT INTO ride_requests (id, lat, lng) VALUES ($1, 37.77, -122.42)`, [id]);
   }
 
-  async function insertTrip(id: string, requestId: string, driverId: string, status = 'matched'): Promise<void> {
+  async function insertTrip(
+    id: string,
+    requestId: string,
+    driverId: string,
+    status = 'matched',
+  ): Promise<void> {
     await pool.query(
       `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token)
        VALUES ($1, $2, $3, 37.77, -122.42, $4, 'tok')`,
@@ -40,7 +45,9 @@ describe('migrations (testcontainers postgres)', () => {
   it('applies idempotently and creates both tables with expected defaults', async () => {
     await runMigrations(container.getConnectionUri()); // second run is a no-op
     await insertRequest('r1');
-    const req = await pool.query(`SELECT status, matched_trip_id FROM ride_requests WHERE id = 'r1'`);
+    const req = await pool.query(
+      `SELECT status, matched_trip_id FROM ride_requests WHERE id = 'r1'`,
+    );
     expect(req.rows[0]).toEqual({ status: 'pending', matched_trip_id: null });
 
     await insertTrip('t1', 'r1', 'd1');
@@ -103,7 +110,9 @@ describe('migrations (testcontainers postgres)', () => {
     await insertRequest('r1');
     await insertTrip('t1', 'r1', 'd1');
     await expect(insertTrip('t2', 'r1', 'd2')).rejects.toMatchObject({ code: '23505' });
-    await expect(insertTrip('t3', 'r1', 'd3', 'teleporting')).rejects.toMatchObject({ code: '23514' });
+    await expect(insertTrip('t3', 'r1', 'd3', 'teleporting')).rejects.toMatchObject({
+      code: '23514',
+    });
     await expect(
       pool.query(`UPDATE ride_requests SET status = 'nonsense' WHERE id = 'r1'`),
     ).rejects.toMatchObject({ code: '23514' });

@@ -152,7 +152,9 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
 
   const app = Fastify({ logger: opts.logger ?? false });
   if (authToken === undefined) {
-    app.log.warn('read-model auth disabled — /spawn and /events are OPEN (set READ_MODEL_TOKEN; demo/local only)');
+    app.log.warn(
+      'read-model auth disabled — /spawn and /events are OPEN (set READ_MODEL_TOKEN; demo/local only)',
+    );
   }
   const surge = new SurgeStore(redis);
   const sseClients = new Set<ServerResponse>();
@@ -188,7 +190,14 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
   // ---- active trip arcs (bounded) + active count ----
   async function tripArcs(): Promise<{ arcs: TripArc[]; active: number }> {
     const [arcRes, countRes] = await Promise.all([
-      pool.query<{ id: string; plat: number; plng: number; dlat: number | null; dlng: number | null; status: string }>(
+      pool.query<{
+        id: string;
+        plat: number;
+        plng: number;
+        dlat: number | null;
+        dlng: number | null;
+        status: string;
+      }>(
         `SELECT t.id, t.rider_lat AS plat, t.rider_lng AS plng,
                 r.dest_lat AS dlat, r.dest_lng AS dlng, t.status
          FROM trips t JOIN ride_requests r ON r.id = t.request_id
@@ -209,7 +218,11 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
   }
 
   // ---- counters: scrape the matcher, derive rates over the tick ----
-  async function counters(surges: readonly CellSurge[], activeTrips: number, driversTotal: number): Promise<Counters> {
+  async function counters(
+    surges: readonly CellSurge[],
+    activeTrips: number,
+    driversTotal: number,
+  ): Promise<Counters> {
     let matchesTotal = prev?.matches ?? 0;
     let unmatchedTotal = prev?.unmatched ?? 0;
     let p50Ms = 0;
@@ -273,7 +286,12 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
       trips: arcs,
       surge: surges
         .filter((s) => s.multiplier > 1)
-        .map((s) => ({ cell: s.cell, m: Number(s.multiplier.toFixed(3)), demand: s.demand, supply: s.supply })),
+        .map((s) => ({
+          cell: s.cell,
+          m: Number(s.multiplier.toFixed(3)),
+          demand: s.demand,
+          supply: s.supply,
+        })),
       counters: c,
     };
   }
@@ -296,7 +314,9 @@ export function buildReadModel(opts: ReadModelOptions): ReadModel {
     // G3: gate the mutating (/spawn, /proof, /fault) and reading (/events,
     // /trip) demo endpoints behind the shared token when one is configured.
     // /healthz and /metrics stay open for the compose healthcheck and scraping.
-    const gated = ['/spawn', '/events', '/proof', '/fault', '/trip'].some((p) => req.url.startsWith(p));
+    const gated = ['/spawn', '/events', '/proof', '/fault', '/trip'].some((p) =>
+      req.url.startsWith(p),
+    );
     if (authToken !== undefined && gated) {
       const provided = new URL(req.url, 'http://localhost').searchParams.get('token');
       if (provided !== authToken) {

@@ -46,19 +46,21 @@ export function FirstVisitOverlay(): ReactElement | null {
         <ul className="mt-4 flex flex-col gap-3 font-body text-[13.5px] leading-relaxed text-fg/85">
           {/* TODO(voice): line 1 — what this is. */}
           <li>
-            <span className="microlabel mr-2 text-[9.5px] text-amber">what</span>A live ride-dispatch control room:
-            a real-time map of drivers, trips and surge, streamed from the running engine.
+            <span className="microlabel mr-2 text-[9.5px] text-amber">what</span>A live
+            ride-dispatch control room: a real-time map of drivers, trips and surge, streamed from
+            the running engine.
           </li>
           {/* TODO(voice): line 2 — what to press. */}
           <li>
             <span className="microlabel mr-2 text-[9.5px] text-amber">press</span>
-            <span className="text-amber">Run the proof</span> to fire 200 concurrent requests at 20 drivers, or{' '}
-            <span className="text-alarm">Crash the matcher</span> to watch it recover.
+            <span className="text-amber">Run the proof</span> to fire 200 concurrent requests at 20
+            drivers, or <span className="text-alarm">Crash the matcher</span> to watch it recover.
           </li>
           {/* TODO(voice): line 3 — link to the code. */}
           <li>
             <span className="microlabel mr-2 text-[9.5px] text-amber">code</span>Every panel’s{' '}
-            <span className="font-mono text-amber">{'{}'}</span> opens the mechanism and links its test.
+            <span className="font-mono text-amber">{'{}'}</span> opens the mechanism and links its
+            test.
           </li>
         </ul>
         <div className="mt-5 flex justify-end">

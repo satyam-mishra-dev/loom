@@ -52,7 +52,10 @@ describe('rankCandidates', () => {
   });
 
   it('does not mutate its input', () => {
-    const input = [driver('x', RIDER.lat + 0.01, RIDER.lng, 1), driver('y', RIDER.lat, RIDER.lng, 1)];
+    const input = [
+      driver('x', RIDER.lat + 0.01, RIDER.lng, 1),
+      driver('y', RIDER.lat, RIDER.lng, 1),
+    ];
     rankCandidates(RIDER.lat, RIDER.lng, input);
     expect(input.map((c) => c.driverId)).toEqual(['x', 'y']);
   });

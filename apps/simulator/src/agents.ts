@@ -1,11 +1,5 @@
 import type { Rng } from './rng.js';
-import {
-  clampToCity,
-  distance,
-  randomIntersection,
-  type City,
-  type Point,
-} from './world.js';
+import { clampToCity, distance, randomIntersection, type City, type Point } from './world.js';
 
 /** roaming: random waypoints; to_pickup/to_dest: driving an assigned trip's legs. */
 export type AgentMode = 'roaming' | 'to_pickup' | 'to_dest';
@@ -69,7 +63,12 @@ export function assignTrip(agent: DriverAgent, trip: ActiveTrip): void {
  * the simulation can emit it. Positions stay in bounds because every
  * waypoint is an in-bounds point.
  */
-export function tickAgent(city: City, agent: DriverAgent, rng: Rng, dtSec: number): TripArrival | null {
+export function tickAgent(
+  city: City,
+  agent: DriverAgent,
+  rng: Rng,
+  dtSec: number,
+): TripArrival | null {
   const d = distance(agent.pos, agent.waypoint);
   const step = agent.speedMps * dtSec;
   if (d > step) {

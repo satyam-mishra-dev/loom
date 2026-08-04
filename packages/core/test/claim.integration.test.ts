@@ -103,7 +103,9 @@ describe('atomic claim (testcontainers redis)', () => {
   it('50 concurrent claims on one driver yield exactly one token', async () => {
     await seed('contested');
     const results = await Promise.all(
-      Array.from({ length: 50 }, (_, i) => claims.claimDriver('contested', `trip-${i}`, T0, FRESH_MS, TTL_MS)),
+      Array.from({ length: 50 }, (_, i) =>
+        claims.claimDriver('contested', `trip-${i}`, T0, FRESH_MS, TTL_MS),
+      ),
     );
     const tokens = results.filter((t): t is string => t !== null);
     expect(tokens).toHaveLength(1);
@@ -242,13 +244,18 @@ describe('atomic claim (testcontainers redis)', () => {
 
       expect(await claims.expiredClaims(T0 + TTL_MS - 1)).toEqual([]);
       expect(await claims.expiredClaims(T0 + TTL_MS)).toEqual(['mover']);
-      expect(await claims.janitorRelease('mover', T0 + TTL_MS)).toEqual({ kind: 'released', tripId: 'trip-9' });
+      expect(await claims.janitorRelease('mover', T0 + TTL_MS)).toEqual({
+        kind: 'released',
+        tripId: 'trip-9',
+      });
       expect(await redis.hget(driverKey('mover'), 'status')).toBe('available');
       expect(await redis.smembers(cellKey(neighbor))).toEqual(['mover']);
       expect(await redis.exists(claimKey('mover'))).toBe(0);
       expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
       // Released driver is claimable again.
-      expect(await claims.claimDriver('mover', 'trip-10', T0 + 1000, FRESH_MS, TTL_MS)).not.toBeNull();
+      expect(
+        await claims.claimDriver('mover', 'trip-10', T0 + 1000, FRESH_MS, TTL_MS),
+      ).not.toBeNull();
     });
 
     it('does NOT free an offline (silence-swept) driver into an available set', async () => {
@@ -268,7 +275,10 @@ describe('atomic claim (testcontainers redis)', () => {
       await seed('d1');
       await claims.claimDriver('d1', 'trip-1', T0, FRESH_MS, TTL_MS);
       await redis.del(claimKey('d1')); // simulate the PX firing
-      expect(await claims.janitorRelease('d1', T0 + TTL_MS)).toEqual({ kind: 'gone', repaired: true });
+      expect(await claims.janitorRelease('d1', T0 + TTL_MS)).toEqual({
+        kind: 'gone',
+        repaired: true,
+      });
       expect(await redis.hget(driverKey('d1'), 'status')).toBe('available');
       expect(await redis.smembers(cellKey(C0))).toEqual(['d1']);
       expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);

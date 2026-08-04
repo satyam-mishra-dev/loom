@@ -47,11 +47,11 @@ flowchart TD
 ```
 
 The offer transport is split on purpose: **downstream** (matcher → driver) is
-Redis pub/sub — a message for a disconnected driver *should* evaporate because
+Redis pub/sub — a message for a disconnected driver _should_ evaporate because
 the matcher already owns the recovery path (offer timeout → release → next
 candidate). **Upstream** (driver reply → matcher) is a Redis list the awaiting
 matcher `BLPOP`s, so a reply that arrives a beat before the matcher blocks is
-buffered rather than dropped, and the block's deadline *is* the offer TTL.
+buffered rather than dropped, and the block's deadline _is_ the offer TTL.
 
 ---
 
@@ -66,7 +66,7 @@ hand-waved. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how each is enforced an
 20 available drivers in one H3 cell, fires **200 concurrent ride requests**
 through the real matching path (real Redis, real Postgres, real Lua claim, real
 offer round-trip — nothing mocked), and asserts exactly **20 trips**, **180
-honest unmatched**, every assigned driver unique in Postgres *and* consistent in
+honest unmatched**, every assigned driver unique in Postgres _and_ consistent in
 Redis, and **zero partial-unique-index violations**. It also runs across **two
 independent matcher instances** to prove cross-process safety, and a **crash
 variant** ([`test/no-double-assignment-crash.test.ts`](test/no-double-assignment-crash.test.ts))
@@ -102,11 +102,11 @@ deliberate next experiment, not a hidden result. The table above was captured on
 a quiet box; [`PERFORMANCE.md`](PERFORMANCE.md) profiles where that latency goes
 (~90% is queue wait, not match logic), records a controlled before/after
 optimization pass under heavier co-resident load, and is honest about what did
-*not* help (adding consumers).
+_not_ help (adding consumers).
 
 Geo candidate search (k-ring expand, `need=8`, `maxK=3`) over the indexed fleet:
 **p50 0.59 ms, p99 2.82 ms** across 500 searches (query points now seeded, so the
-query *set* is reproducible run to run). These sub-millisecond micro-numbers stay
+query _set_ is reproducible run to run). These sub-millisecond micro-numbers stay
 **statistical** — single-digit-ms medians carry real scheduling jitter, so treat
 them as a magnitude, not a fixed constant. Reproduce with `npm run bench` (needs
 Docker; writes `scripts/bench-results.json`).
@@ -132,14 +132,14 @@ docker compose up -d --wait
 
 Then open the dashboard at **http://localhost:4620**. Other host ports:
 
-| Service            | URL                              |
-| ------------------ | -------------------------------- |
-| Dashboard          | http://localhost:4620            |
-| Read model / SSE   | http://localhost:4600/events     |
-| Gateway metrics    | http://localhost:4640/metrics    |
-| Matcher metrics    | http://localhost:4650/metrics    |
-| Postgres           | localhost:5434                   |
-| Redis              | localhost:6381                   |
+| Service          | URL                           |
+| ---------------- | ----------------------------- |
+| Dashboard        | http://localhost:4620         |
+| Read model / SSE | http://localhost:4600/events  |
+| Gateway metrics  | http://localhost:4640/metrics |
+| Matcher metrics  | http://localhost:4650/metrics |
+| Postgres         | localhost:5434                |
+| Redis            | localhost:6381                |
 
 The simulator boots a 2,000-driver fleet by default; set `SIM_DRIVERS=5000` (and
 `SIM_RPS`, `SIM_HOTSPOTS`) for the headline demo. Tear down with
@@ -176,7 +176,7 @@ neighbourhood scale, the right bucket for city dispatch). A ping computes its
 cell with `h3-js`, the driver's id moves between `cell:{h3}:available` sets, and
 candidate search is an expanding `gridDisk` (k-ring): union the disk's
 available-sets for k = 0, 1, 2… until there are enough fresh candidates or a
-radius cap. Hexagons are the point — a hexagon's six neighbours all sit at *one*
+radius cap. Hexagons are the point — a hexagon's six neighbours all sit at _one_
 centre-to-centre distance, so a k-ring is a clean radius query; a square grid has
 two neighbour distances (edge vs diagonal, ratio √2), so "k rings" over squares
 approximate a circle badly and distance-by-ring needs case analysis.
@@ -186,7 +186,7 @@ scores): it would spare me the cell arithmetic and give radius search out of the
 box, but geohash inherits lat/lng rectangle distortion (cells shrink toward the
 poles) and the geohash **boundary problem** — two points metres apart across a
 cell edge share no prefix. H3's explicit neighbour traversal is the honest fix
-for that, with uniform geometry, and it lets me keep per-cell *available* sets
+for that, with uniform geometry, and it lets me keep per-cell _available_ sets
 that a claim mutates in O(1), which is what the atomic claim needs — not a
 radius scan per request.
 
@@ -194,7 +194,7 @@ radius scan per request.
 tracking and, crucially, **server-side geofencing** — it will push an event when
 an object enters/leaves a region. That is genuinely more than I built. I chose
 not to take the dependency because dispatch here is pull-based (a request asks
-"who is near me *now*"), not a standing set of geofences, and folding the geo
+"who is near me _now_"), not a standing set of geofences, and folding the geo
 index into the same Redis that already holds the claim keys, offer reply lists,
 and surge windows means the atomic claim and the index membership live in one
 store — one round trip, one failure domain, one `FLUSHALL`-and-heal story. If I
@@ -223,4 +223,4 @@ my own.
 - **[Centrifugo](https://centrifugal.dev/)** — WS heartbeat and backpressure
   posture (server ping, bounded outbound queue, disconnect-and-resync).
 - **[timgit/pg-boss](https://github.com/timgit/pg-boss)** — `FOR UPDATE SKIP
-  LOCKED` claim ergonomics I weighed against the Redis Lua claim.
+LOCKED` claim ergonomics I weighed against the Redis Lua claim.

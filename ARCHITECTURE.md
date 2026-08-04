@@ -29,7 +29,7 @@ paths through `pg` — I want the SQL visible, not hidden behind an ORM.
 
 **Ping → index.** Each driver reports position at ~1 Hz over one WebSocket. The
 gateway authenticates the socket at upgrade (auth-lite HMAC token), then buffers
-pings across *all* sockets into one batch flushed every 50 ms or every 500 pings,
+pings across _all_ sockets into one batch flushed every 50 ms or every 500 pings,
 whichever comes first. A flush is one pipelined flight of per-driver Lua scripts:
 each ping is applied atomically — compute the H3 res-8 cell, move the driver's id
 between `cell:{h3}:available` sets, write the `driver:{id}` hash
@@ -70,7 +70,7 @@ claim (Redis), and offer the next candidate; after five offers, an honest
 `unmatched`, logged. The write ordering is deliberate: on accept it is trip
 commit → confirm claim (so every Postgres failure unwinds through the same atomic
 release while the claim still exists); on decline/timeout it is trip revert →
-claim release (so a crash between them leaves a *live* claim the janitor can see,
+claim release (so a crash between them leaves a _live_ claim the janitor can see,
 release, and re-enqueue from — the other order would strand an `offered` row no
 sweep could find).
 
@@ -81,7 +81,7 @@ driver is freed back to `available` in its current cell, and the trip's outbox
 chain (`requested,matching,offered,matched,en_route,in_trip,completed`) is
 complete.
 
-## The atomic claim: defense in depth (Redis *and* Postgres)
+## The atomic claim: defense in depth (Redis _and_ Postgres)
 
 The claim is guarded twice, and I can say precisely why both are needed.
 
@@ -99,7 +99,7 @@ The claim is guarded twice, and I can say precisely why both are needed.
   make a cache wipe capable of violating a business invariant.
 
 Neither store can do the other's job. The signature test asserts that in the
-normal path the index *never* fires (`pgUniqueViolationsTotal === 0`) — it is the
+normal path the index _never_ fires (`pgUniqueViolationsTotal === 0`) — it is the
 backstop, not the mechanism. The index deliberately covers only
 `matched/en_route/in_trip`: an `offered` trip is still exclusive via the Redis
 claim, and a crash-orphaned `offered` row must not block a driver's next
@@ -117,8 +117,8 @@ returns the driver to its cell's available set — then reverts the trip
 (`offered → matching`, guarded, with an outbox row) and re-enqueues the request.
 The sweep is idempotent and multi-janitor-safe: concurrent sweepers race
 harmlessly (one releases, the rest see `live` or a missing key). Because the
-expiry is observable in the data, a claim is *dead the moment its deadline
-passes* even with zero janitors alive — the janitor is how it gets *cleaned up*,
+expiry is observable in the data, a claim is _dead the moment its deadline
+passes_ even with zero janitors alive — the janitor is how it gets _cleaned up_,
 not how it becomes safe. Every matcher embeds the sweep; `janitor-main.ts` runs
 the same loop alone, proving the point.
 
@@ -143,11 +143,11 @@ function the in-process fallback also runs; the Lua mirrors it and is proven
 atomic by an integration test (200 concurrent calls, burst 20 → exactly 20 pass).
 
 The limiter's own Redis is a dependency that can fail, so `DegradingLimiter`
-wraps it: a short timeout around the Redis call routes both errors *and* slow
+wraps it: a short timeout around the Redis call routes both errors _and_ slow
 Redis to an in-process approximate GCRA over a bounded Map (fail-open, the
 default — the limiter exists to protect the service, and rejecting all traffic
-because the *limiter's* store died inverts the priority). A `failClosed` flag
-flips it to reject-on-outage for the cases where the limit *is* the product. Over-
+because the _limiter's_ store died inverts the priority). A `failClosed` flag
+flips it to reject-on-outage for the cases where the limit _is_ the product. Over-
 limit requests get a 429-equivalent back on the socket and a counted metric —
 never a silent drop.
 
@@ -168,9 +168,9 @@ plain HTTP with a trivial framing (`data: …\n\n`), and `EventSource` gives
 automatic reconnection with no code. A WebSocket is a duplex, stateful, framed
 connection; I would be paying for a bidirectional channel I have no upstream
 traffic for, and re-implementing the reconnect logic SSE hands me for free. The
-one place the browser *does* talk back — the "spawn requests" control — is an
+one place the browser _does_ talk back — the "spawn requests" control — is an
 ordinary `POST /spawn`, which is the honest shape for a command. WebSockets are
-where Loom's *drivers* live (bidirectional pings, offers, replies,
+where Loom's _drivers_ live (bidirectional pings, offers, replies,
 heartbeats); the dashboard's needs are the opposite, so the transport is too. The
 snapshot is bounded — driver dots are capped and the true fleet size reported
 separately — so a 5,000-driver fleet never blows the frame.

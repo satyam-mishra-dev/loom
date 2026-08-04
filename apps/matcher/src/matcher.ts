@@ -134,7 +134,10 @@ export class MatcherCore {
     const row = claimed.rows[0];
     if (row === undefined) {
       this.metrics.requestsSkippedTotal++;
-      this.log.warn({ requestId }, 'request not pending — duplicate delivery or lost row, skipping');
+      this.log.warn(
+        { requestId },
+        'request not pending — duplicate delivery or lost row, skipping',
+      );
       return 'skipped';
     }
     const rider = { lat: row.lat, lng: row.lng };
@@ -156,7 +159,13 @@ export class MatcherCore {
       for (const candidate of rankCandidates(rider.lat, rider.lng, candidates)) {
         if (offers >= this.maxOffers) break;
         const driverId = candidate.driverId;
-        const token = await this.claims.claimDriver(driverId, tripId, this.now(), this.freshMs, this.claimTtlMs);
+        const token = await this.claims.claimDriver(
+          driverId,
+          tripId,
+          this.now(),
+          this.freshMs,
+          this.claimTtlMs,
+        );
         if (token === null) {
           this.metrics.claimConflictsTotal++;
           continue;
@@ -165,7 +174,14 @@ export class MatcherCore {
         const offerId = randomUUID();
         let offered: boolean;
         try {
-          offered = await this.trips.offerTrip({ tripId, requestId, driverId, offerId, claimToken: token, rider });
+          offered = await this.trips.offerTrip({
+            tripId,
+            requestId,
+            driverId,
+            offerId,
+            claimToken: token,
+            rider,
+          });
         } catch (err) {
           await this.claims.releaseClaim(driverId, token);
           throw err;
@@ -230,7 +246,13 @@ export class MatcherCore {
           if (!(await this.trips.startEnRoute(tripId))) {
             this.log.error({ tripId }, 'matched trip refused en_route transition');
           }
-          const assigned: TripAssigned = { type: 'trip_assigned', tripId, driverId, pickup: rider, dest };
+          const assigned: TripAssigned = {
+            type: 'trip_assigned',
+            tripId,
+            driverId,
+            pickup: rider,
+            dest,
+          };
           await this.redis.publish(driverChannel(driverId), JSON.stringify(assigned));
           this.metrics.matchesTotal++;
           this.metrics.matchLatencyMs.observe(performance.now() - started);
@@ -322,10 +344,14 @@ export class MatcherCore {
    */
   async recoverProcessing(): Promise<number> {
     let recovered = 0;
-    while ((await this.redis.lmove(REQUESTS_PROCESSING, REQUESTS_QUEUE, 'LEFT', 'RIGHT')) !== null) {
+    while (
+      (await this.redis.lmove(REQUESTS_PROCESSING, REQUESTS_QUEUE, 'LEFT', 'RIGHT')) !== null
+    ) {
       recovered++;
     }
-    while ((await this.redis.lmove(TRIP_EVENTS_PROCESSING, TRIP_EVENTS_QUEUE, 'LEFT', 'RIGHT')) !== null) {
+    while (
+      (await this.redis.lmove(TRIP_EVENTS_PROCESSING, TRIP_EVENTS_QUEUE, 'LEFT', 'RIGHT')) !== null
+    ) {
       recovered++;
     }
     // Requests stranded past the grace window. 'pending' rows lost their LPUSH;
@@ -342,7 +368,10 @@ export class MatcherCore {
     );
     for (const { id, status } of stale.rows) {
       if (status === 'matching') {
-        const trip = await this.pool.query<{ id: string }>('SELECT id FROM trips WHERE request_id = $1', [id]);
+        const trip = await this.pool.query<{ id: string }>(
+          'SELECT id FROM trips WHERE request_id = $1',
+          [id],
+        );
         const tripId = trip.rows[0]?.id;
         if (tripId !== undefined) {
           // Revert the trip and hand the request back to pending. Null means the
@@ -445,7 +474,10 @@ export class MatcherCore {
     }
     if (outcome === 'terminal') {
       this.metrics.tripEventGuardFailuresTotal++;
-      this.log.warn({ tripId, driverId, event }, 'trip progress dropped (duplicate/late/spoof/terminal)');
+      this.log.warn(
+        { tripId, driverId, event },
+        'trip progress dropped (duplicate/late/spoof/terminal)',
+      );
       return;
     }
     if (event === 'trip_done') {

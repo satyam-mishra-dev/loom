@@ -1,5 +1,11 @@
 import type { Redis } from 'ioredis';
-import { GCRA_EPOCH_SEC, GcraLimiter, gcraDecide, type GcraConfig, type RateResult } from './gcra.js';
+import {
+  GCRA_EPOCH_SEC,
+  GcraLimiter,
+  gcraDecide,
+  type GcraConfig,
+  type RateResult,
+} from './gcra.js';
 
 /**
  * Degradation strategy for the rate limiter — the limiter's own store is a
@@ -101,7 +107,12 @@ export class DegradingLimiter {
       if (this.failClosed) {
         this.metrics.failClosedRejectsTotal++;
         this.metrics.deniedTotal++;
-        return { allowed: false, remaining: 0, retryAfterMs: this.config.windowMs, resetAfterMs: this.config.windowMs };
+        return {
+          allowed: false,
+          remaining: 0,
+          retryAfterMs: this.config.windowMs,
+          resetAfterMs: this.config.windowMs,
+        };
       }
       result = this.localLimit(key, cost);
       this.metrics.fallbackTotal++;

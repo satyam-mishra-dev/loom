@@ -72,7 +72,12 @@ export function newClaimToken(): string {
 }
 
 /** The exact JSON stored at claim:{driverId}; expiry math in one place: nowMs + ttlMs. */
-export function buildClaimValue(tripId: string, token: string, nowMs: number, ttlMs: number): string {
+export function buildClaimValue(
+  tripId: string,
+  token: string,
+  nowMs: number,
+  ttlMs: number,
+): string {
   const record: ClaimRecord = { tripId, token, expiresAt: nowMs + ttlMs };
   return JSON.stringify(record);
 }
@@ -203,8 +208,19 @@ interface ClaimCommands {
     ttlMs: number,
     pxMs: number,
   ): Promise<string | null>;
-  flConfirmClaim(claimKey: string, driverKey: string, token: string, nowMs: number, driverId: string): Promise<number>;
-  flReleaseClaim(claimKey: string, driverKey: string, driverId: string, token: string): Promise<number>;
+  flConfirmClaim(
+    claimKey: string,
+    driverKey: string,
+    token: string,
+    nowMs: number,
+    driverId: string,
+  ): Promise<number>;
+  flReleaseClaim(
+    claimKey: string,
+    driverKey: string,
+    driverId: string,
+    token: string,
+  ): Promise<number>;
   flFreeDriver(driverKey: string, driverId: string): Promise<number>;
   flJanitorRelease(
     claimKey: string,
@@ -216,9 +232,7 @@ interface ClaimCommands {
 
 /** Outcome of a janitor sweep attempt on one driver's claim. */
 export type JanitorSweepResult =
-  | { kind: 'live' }
-  | { kind: 'released'; tripId: string }
-  | { kind: 'gone'; repaired: boolean };
+  { kind: 'live' } | { kind: 'released'; tripId: string } | { kind: 'gone'; repaired: boolean };
 
 export class ClaimStore {
   private readonly redis: Redis & ClaimCommands;
@@ -266,15 +280,32 @@ export class ClaimStore {
    * driver to on_trip. Called after the driver accepted and the trip row
    * committed.
    */
-  async confirmClaim(driverId: string, token: string, nowMs: number = Date.now()): Promise<boolean> {
+  async confirmClaim(
+    driverId: string,
+    token: string,
+    nowMs: number = Date.now(),
+  ): Promise<boolean> {
     return (
-      (await this.redis.flConfirmClaim(claimKey(driverId), driverKey(driverId), token, nowMs, driverId)) === 1
+      (await this.redis.flConfirmClaim(
+        claimKey(driverId),
+        driverKey(driverId),
+        token,
+        nowMs,
+        driverId,
+      )) === 1
     );
   }
 
   /** Undo a claim (decline, timeout, PG refusing the trip): back to available, current cell. */
   async releaseClaim(driverId: string, token: string): Promise<boolean> {
-    return (await this.redis.flReleaseClaim(claimKey(driverId), driverKey(driverId), driverId, token)) === 1;
+    return (
+      (await this.redis.flReleaseClaim(
+        claimKey(driverId),
+        driverKey(driverId),
+        driverId,
+        token,
+      )) === 1
+    );
   }
 
   /** Trip completed: on_trip → available in the driver's current cell. No-op unless on_trip. */
@@ -289,7 +320,12 @@ export class ClaimStore {
 
   /** Atomically release ONE expired claim (janitor). See JANITOR_LUA for semantics. */
   async janitorRelease(driverId: string, nowMs: number): Promise<JanitorSweepResult> {
-    const res = await this.redis.flJanitorRelease(claimKey(driverId), driverKey(driverId), driverId, nowMs);
+    const res = await this.redis.flJanitorRelease(
+      claimKey(driverId),
+      driverKey(driverId),
+      driverId,
+      nowMs,
+    );
     switch (res[0]) {
       case 'released':
         return { kind: 'released', tripId: String(res[1] ?? '') };

@@ -6,15 +6,27 @@ import { Badge, Skeleton } from './ui/base.js';
 import { Sheet } from './ui/overlay.js';
 import { Didactic } from './Didactic.js';
 
-const STEPS = ['requested', 'matching', 'offered', 'matched', 'en_route', 'in_trip', 'completed'] as const;
+const STEPS = [
+  'requested',
+  'matching',
+  'offered',
+  'matched',
+  'en_route',
+  'in_trip',
+  'completed',
+] as const;
 
 type Fetch =
-  | { phase: 'loading' }
-  | { phase: 'ok'; trip: TripHistory }
-  | { phase: 'error'; message: string };
+  { phase: 'loading' } | { phase: 'ok'; trip: TripHistory } | { phase: 'error'; message: string };
 
 /** Right Sheet: the trip state machine + offer cascade, read from real data (§3.4). */
-export function TripInspector({ tripId, onClose }: { tripId: string | null; onClose: () => void }): ReactElement {
+export function TripInspector({
+  tripId,
+  onClose,
+}: {
+  tripId: string | null;
+  onClose: () => void;
+}): ReactElement {
   const [state, setState] = useState<Fetch>({ phase: 'loading' });
 
   useEffect(() => {
@@ -23,7 +35,9 @@ export function TripInspector({ tripId, onClose }: { tripId: string | null; onCl
     setState({ phase: 'loading' });
     fetchTrip(tripId).then(
       (trip) => live && setState({ phase: 'ok', trip }),
-      (err: unknown) => live && setState({ phase: 'error', message: err instanceof Error ? err.message : 'failed' }),
+      (err: unknown) =>
+        live &&
+        setState({ phase: 'error', message: err instanceof Error ? err.message : 'failed' }),
     );
     return () => {
       live = false;
@@ -41,7 +55,9 @@ export function TripInspector({ tripId, onClose }: { tripId: string | null; onCl
       )}
       {state.phase === 'error' && (
         <div className="rounded-[10px] border border-alarm/40 bg-alarm/8 p-4">
-          <div className="font-hud text-[13px] font-600 uppercase tracking-wide text-alarm">Couldn’t load the trip</div>
+          <div className="font-hud text-[13px] font-600 uppercase tracking-wide text-alarm">
+            Couldn’t load the trip
+          </div>
           <p className="mt-2 font-body text-[12.5px] text-fg/80">
             {state.message}. It may have completed and been archived — click another arc.
           </p>
@@ -96,7 +112,10 @@ function TripBody({ trip }: { trip: TripHistory }): ReactElement {
                   {i < STEPS.length - 1 && (
                     <span
                       className="mt-[4px] h-[2px] w-4 shrink-0"
-                      style={{ background: reached && firstAt.has(STEPS[i + 1]!) ? '#4FC3F7' : 'rgba(34,48,73,0.9)' }}
+                      style={{
+                        background:
+                          reached && firstAt.has(STEPS[i + 1]!) ? '#4FC3F7' : 'rgba(34,48,73,0.9)',
+                      }}
                     />
                   )}
                 </div>
@@ -104,7 +123,10 @@ function TripBody({ trip }: { trip: TripHistory }): ReactElement {
             })}
             {cancelled && (
               <div className="ml-1 flex w-[64px] flex-col items-center text-center">
-                <span className="mb-1.5 h-2.5 w-2.5 rounded-full" style={{ background: '#FF5D5D' }} />
+                <span
+                  className="mb-1.5 h-2.5 w-2.5 rounded-full"
+                  style={{ background: '#FF5D5D' }}
+                />
                 <span className="font-hud text-[9px] font-600 uppercase leading-tight tracking-wide text-alarm">
                   cancelled
                 </span>
@@ -131,7 +153,10 @@ function TripBody({ trip }: { trip: TripHistory }): ReactElement {
         <div className="mb-2 microlabel text-[10px]">Event log</div>
         <div className="flex flex-col gap-1 font-mono text-[11px]">
           {trip.events.map((e, i) => (
-            <div key={i} className="flex items-baseline justify-between gap-3 border-b border-line/60 py-1">
+            <div
+              key={i}
+              className="flex items-baseline justify-between gap-3 border-b border-line/60 py-1"
+            >
               <span className="text-fg/85">{e.type}</span>
               <span className="text-muted/70">{e.event ?? ''}</span>
               <span className="tnum text-muted/60">{clock(e.at)}</span>
@@ -183,5 +208,9 @@ function SurgeBadge({ m }: { m: number }): ReactElement {
 
 function clock(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  return (
+    d.toLocaleTimeString('en-GB', { hour12: false }) +
+    '.' +
+    String(d.getMilliseconds()).padStart(3, '0')
+  );
 }

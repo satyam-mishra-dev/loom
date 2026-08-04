@@ -63,7 +63,10 @@ class FakeFleet {
       fleet.offers.push(msg);
       const verdict = fleet.behavior(msg);
       if (verdict === 'silent') return;
-      void fleet.redis.lpush(offerReplyKey(msg.offerId), JSON.stringify({ accept: verdict === 'accept' }));
+      void fleet.redis.lpush(
+        offerReplyKey(msg.offerId),
+        JSON.stringify({ accept: verdict === 'accept' }),
+      );
     });
     await sub.psubscribe('driver:*:msg');
     return fleet;
@@ -150,7 +153,9 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
 
     // Cascade: offer → accept → matched → trip_assigned → en_route.
     await waitFor(async () => {
-      const res = await pool.query<{ status: string }>(`SELECT status FROM trips WHERE request_id = 'r1'`);
+      const res = await pool.query<{ status: string }>(
+        `SELECT status FROM trips WHERE request_id = 'r1'`,
+      );
       return res.rows[0]?.status === 'en_route';
     });
     const trip = await pool.query<{ id: string; driver_id: string; status: string }>(
@@ -169,14 +174,21 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
     expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
 
     // Progression: the driver reports milestones the way the gateway would.
-    await redis.lpush(TRIP_EVENTS_QUEUE, JSON.stringify({ tripId, driverId, event: 'arrived_pickup' }));
+    await redis.lpush(
+      TRIP_EVENTS_QUEUE,
+      JSON.stringify({ tripId, driverId, event: 'arrived_pickup' }),
+    );
     await waitFor(async () => {
-      const res = await pool.query<{ status: string }>('SELECT status FROM trips WHERE id = $1', [tripId]);
+      const res = await pool.query<{ status: string }>('SELECT status FROM trips WHERE id = $1', [
+        tripId,
+      ]);
       return res.rows[0]?.status === 'in_trip';
     });
     await redis.lpush(TRIP_EVENTS_QUEUE, JSON.stringify({ tripId, driverId, event: 'trip_done' }));
     await waitFor(async () => {
-      const res = await pool.query<{ status: string }>('SELECT status FROM trips WHERE id = $1', [tripId]);
+      const res = await pool.query<{ status: string }>('SELECT status FROM trips WHERE id = $1', [
+        tripId,
+      ]);
       return res.rows[0]?.status === 'completed';
     });
 
@@ -319,7 +331,9 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
 
     // A live matcher completes the re-cascade on the SAME trip row.
     expect(await newCore().matchRequest('r1')).toBe('matched');
-    expect((await pool.query(`SELECT status, driver_id FROM trips WHERE id = 'trip-1'`)).rows[0]).toEqual({
+    expect(
+      (await pool.query(`SELECT status, driver_id FROM trips WHERE id = 'trip-1'`)).rows[0],
+    ).toEqual({
       status: 'en_route',
       driver_id: 'd0',
     });
@@ -356,10 +370,10 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
       Date.now(),
     );
     // The pre-existing active trip that pins d0 in the partial-unique index.
-    await pool.query(`INSERT INTO ride_requests (id, lat, lng, status) VALUES ('r0', $1, $2, 'matched')`, [
-      CENTER.lat,
-      CENTER.lng,
-    ]);
+    await pool.query(
+      `INSERT INTO ride_requests (id, lat, lng, status) VALUES ('r0', $1, $2, 'matched')`,
+      [CENTER.lat, CENTER.lng],
+    );
     await pool.query(
       `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token)
        VALUES ('trip-a', 'r0', 'd0', $1, $2, 'matched', 'tok')`,
@@ -442,7 +456,9 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
 
     // A live matcher finishes the re-cascade on the SAME trip row.
     expect(await core.matchRequest('r1')).toBe('matched');
-    expect((await pool.query(`SELECT status, driver_id FROM trips WHERE id = 'trip-b'`)).rows[0]).toEqual({
+    expect(
+      (await pool.query(`SELECT status, driver_id FROM trips WHERE id = 'trip-b'`)).rows[0],
+    ).toEqual({
       status: 'en_route',
       driver_id: 'd0',
     });
@@ -509,8 +525,13 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
       await b.start(1);
 
       // Force the reorder: trip_done lands FIRST, while the trip is still en_route.
-      await redis.lpush(TRIP_EVENTS_QUEUE, JSON.stringify({ tripId: 'trip-1', driverId: 'd0', event: 'trip_done' }));
-      await waitFor(() => a.metrics.tripEventPrematureTotal + b.metrics.tripEventPrematureTotal >= 1);
+      await redis.lpush(
+        TRIP_EVENTS_QUEUE,
+        JSON.stringify({ tripId: 'trip-1', driverId: 'd0', event: 'trip_done' }),
+      );
+      await waitFor(
+        () => a.metrics.tripEventPrematureTotal + b.metrics.tripEventPrematureTotal >= 1,
+      );
 
       // Now the predecessor arrives; the requeued trip_done retries and applies.
       await redis.lpush(
@@ -519,7 +540,9 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
       );
 
       await waitFor(
-        async () => (await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]?.status === 'completed',
+        async () =>
+          (await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]?.status ===
+          'completed',
       );
       await waitFor(async () => (await redis.hget(driverKey('d0'), 'status')) === 'available');
 
@@ -529,7 +552,9 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
       expect(await redis.smembers(cellKey(C0))).toEqual(['d0']);
       const chain = await eventChain('trip-1');
       expect(chain.slice(-2)).toEqual(['in_trip', 'completed']);
-      expect(a.metrics.tripEventPrematureTotal + b.metrics.tripEventPrematureTotal).toBeGreaterThanOrEqual(1);
+      expect(
+        a.metrics.tripEventPrematureTotal + b.metrics.tripEventPrematureTotal,
+      ).toBeGreaterThanOrEqual(1);
     } finally {
       await a.stop();
       await b.stop();

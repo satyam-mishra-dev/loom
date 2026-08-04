@@ -97,21 +97,38 @@ export function Didactic({ topic }: { topic: keyof typeof TOPICS }): ReactElemen
       <div className="font-hud text-[13px] font-700 uppercase tracking-wide text-fg">{t.title}</div>
       <p className="mt-2 font-body text-[12.5px] leading-relaxed text-fg/85">{t.body}</p>
       <div className="mt-3 flex flex-col gap-1 border-t border-line pt-2 font-mono text-[11px] text-muted">
-        <LinkOrPath label="architecture" href={arch} text={`ARCHITECTURE.md § ${t.archAnchor.replace(/-/g, ' ')}`} />
+        <LinkOrPath
+          label="architecture"
+          href={arch}
+          text={`ARCHITECTURE.md § ${t.archAnchor.replace(/-/g, ' ')}`}
+        />
         <LinkOrPath label="test" href={test} text={t.testPath} />
       </div>
     </Popover>
   );
 }
 
-function LinkOrPath({ label, href, text }: { label: string; href: string | null; text: string }): ReactElement {
+function LinkOrPath({
+  label,
+  href,
+  text,
+}: {
+  label: string;
+  href: string | null;
+  text: string;
+}): ReactElement {
   return (
     <div className="flex items-baseline gap-2">
       <span className="microlabel text-[9px] text-muted/70">{label}</span>
       {href === null ? (
         <span className="truncate text-amber/80">{text}</span>
       ) : (
-        <a href={href} target="_blank" rel="noreferrer" className="truncate text-amber hover:underline">
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="truncate text-amber hover:underline"
+        >
           {text}
         </a>
       )}

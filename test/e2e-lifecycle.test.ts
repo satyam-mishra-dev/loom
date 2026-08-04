@@ -30,10 +30,15 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SECRET = 'e2e-secret';
 const DRIVERS = 200;
 
-const COMPLETED_CHAIN = /^requested,matching,offered(,matching,offered)*,matched,en_route,in_trip,completed$/;
+const COMPLETED_CHAIN =
+  /^requested,matching,offered(,matching,offered)*,matched,en_route,in_trip,completed$/;
 const CANCELLED_CHAIN = /^requested,matching(,offered,matching)+,cancelled$/;
 
-async function waitFor(cond: () => Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
+async function waitFor(
+  cond: () => Promise<boolean>,
+  timeoutMs: number,
+  what: string,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await cond())) {
     if (Date.now() > deadline) throw new Error(`waitFor timed out: ${what}`);
@@ -78,106 +83,102 @@ describe('E2E lifecycle: simulator + gateway + matcher + janitor', () => {
     await Promise.all([redisContainer.stop(), pgContainer.stop()]);
   });
 
-  it(
-    `${DRIVERS} seeded drivers: every request reaches a terminal state, every completed trip has a full outbox chain`,
-    async () => {
-      const port = (gateway.app.server.address() as AddressInfo).port;
-      const url = `ws://127.0.0.1:${port}/ws?token=${signToken('fleet:sim', SECRET)}`;
-      let stderr = '';
-      sim = spawn(
-        process.execPath,
-        // prettier-ignore
-        [
+  it(`${DRIVERS} seeded drivers: every request reaches a terminal state, every completed trip has a full outbox chain`, async () => {
+    const port = (gateway.app.server.address() as AddressInfo).port;
+    const url = `ws://127.0.0.1:${port}/ws?token=${signToken('fleet:sim', SECRET)}`;
+    let stderr = '';
+    sim = spawn(
+      process.execPath,
+      // prettier-ignore
+      [
           '--import', 'tsx', 'apps/simulator/src/main.ts',
           '--sink', 'ws', '--gateway', url,
           '--drivers', String(DRIVERS), '--rps', '2', '--hotspots', '2',
           '--seed', '42', '--speedup', '25', '--city-m', '800',
           '--accept-prob', '0.8', '--request-ticks', '60', '--ticks', '0',
         ],
-        { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] },
-      );
-      sim.stderr?.on('data', (chunk: Buffer) => (stderr += String(chunk)));
+      { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+    sim.stderr?.on('data', (chunk: Buffer) => (stderr += String(chunk)));
 
-      // Requests flow in for the first 60 simulated seconds…
-      await waitFor(
-        async () => {
-          const res = await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM ride_requests');
-          return (res.rows[0]?.n ?? 0) >= 50;
-        },
-        60_000,
-        'requests arriving',
-      );
+    // Requests flow in for the first 60 simulated seconds…
+    await waitFor(
+      async () => {
+        const res = await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM ride_requests');
+        return (res.rows[0]?.n ?? 0) >= 50;
+      },
+      60_000,
+      'requests arriving',
+    );
 
-      // …then the whole system drains: every request terminal, every trip
-      // terminal (the simulator keeps ticking so in-flight trips finish).
-      await waitFor(
-        async () => {
-          const res = await pool.query<{ open: number; trips_open: number }>(
-            `SELECT
+    // …then the whole system drains: every request terminal, every trip
+    // terminal (the simulator keeps ticking so in-flight trips finish).
+    await waitFor(
+      async () => {
+        const res = await pool.query<{ open: number; trips_open: number }>(
+          `SELECT
                count(*) FILTER (WHERE status NOT IN ('matched', 'unmatched'))::int AS open,
                (SELECT count(*) FROM trips WHERE status NOT IN ('completed', 'cancelled'))::int AS trips_open
              FROM ride_requests`,
-          );
-          return res.rows[0]?.open === 0 && res.rows[0]?.trips_open === 0;
-        },
-        120_000,
-        'all requests and trips terminal',
-      );
+        );
+        return res.rows[0]?.open === 0 && res.rows[0]?.trips_open === 0;
+      },
+      120_000,
+      'all requests and trips terminal',
+    );
 
-      const totals = await pool.query<{ status: string; n: number }>(
-        'SELECT status, count(*)::int AS n FROM ride_requests GROUP BY status',
-      );
-      const requestCounts = Object.fromEntries(totals.rows.map((r) => [r.status, r.n]));
-      const matched = requestCounts['matched'] ?? 0;
-      expect(matched).toBeGreaterThan(0);
+    const totals = await pool.query<{ status: string; n: number }>(
+      'SELECT status, count(*)::int AS n FROM ride_requests GROUP BY status',
+    );
+    const requestCounts = Object.fromEntries(totals.rows.map((r) => [r.status, r.n]));
+    const matched = requestCounts['matched'] ?? 0;
+    expect(matched).toBeGreaterThan(0);
 
-      // Outbox completeness: every terminal trip carries its entire history.
-      const chains = await pool.query<{ id: string; status: string; chain: string }>(
-        `SELECT t.id, t.status,
+    // Outbox completeness: every terminal trip carries its entire history.
+    const chains = await pool.query<{ id: string; status: string; chain: string }>(
+      `SELECT t.id, t.status,
                 (SELECT string_agg(e.type, ',' ORDER BY e.id) FROM trip_events e WHERE e.trip_id = t.id) AS chain
          FROM trips t`,
-      );
-      expect(chains.rows.length).toBeGreaterThan(0);
-      for (const { id, status, chain } of chains.rows) {
-        if (status === 'completed') expect(chain, `trip ${id}`).toMatch(COMPLETED_CHAIN);
-        else expect(chain, `trip ${id}`).toMatch(CANCELLED_CHAIN);
-      }
-      const completed = chains.rows.filter((t) => t.status === 'completed').length;
-      expect(completed).toBe(matched);
+    );
+    expect(chains.rows.length).toBeGreaterThan(0);
+    for (const { id, status, chain } of chains.rows) {
+      if (status === 'completed') expect(chain, `trip ${id}`).toMatch(COMPLETED_CHAIN);
+      else expect(chain, `trip ${id}`).toMatch(CANCELLED_CHAIN);
+    }
+    const completed = chains.rows.filter((t) => t.status === 'completed').length;
+    expect(completed).toBe(matched);
 
-      // Every driver freed: nobody left claimed or on_trip, no claims, no
-      // expiry-ZSET entries, and the never-happens counters never happened.
-      const stuck: string[] = [];
-      for (let i = 0; i < DRIVERS; i++) {
-        const status = await redis.hget(`driver:d${i}`, 'status');
-        if (status === 'claimed' || status === 'on_trip') stuck.push(`d${i}:${status ?? 'gone'}`);
-      }
-      expect(stuck).toEqual([]);
-      expect(await redis.keys('claim:*')).toEqual([]);
-      expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
-      expect(core.metrics.pgUniqueViolationsTotal).toBe(0);
-      expect(core.metrics.confirmFailuresTotal).toBe(0);
-      expect(core.metrics.tripsCompletedTotal).toBe(completed);
+    // Every driver freed: nobody left claimed or on_trip, no claims, no
+    // expiry-ZSET entries, and the never-happens counters never happened.
+    const stuck: string[] = [];
+    for (let i = 0; i < DRIVERS; i++) {
+      const status = await redis.hget(`driver:d${i}`, 'status');
+      if (status === 'claimed' || status === 'on_trip') stuck.push(`d${i}:${status ?? 'gone'}`);
+    }
+    expect(stuck).toEqual([]);
+    expect(await redis.keys('claim:*')).toEqual([]);
+    expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
+    expect(core.metrics.pgUniqueViolationsTotal).toBe(0);
+    expect(core.metrics.confirmFailuresTotal).toBe(0);
+    expect(core.metrics.tripsCompletedTotal).toBe(completed);
 
-      // The invariant, one last time, in SQL.
-      const dup = await pool.query(
-        `SELECT driver_id FROM trips WHERE status IN ('matched', 'en_route', 'in_trip')
+    // The invariant, one last time, in SQL.
+    const dup = await pool.query(
+      `SELECT driver_id FROM trips WHERE status IN ('matched', 'en_route', 'in_trip')
          GROUP BY driver_id HAVING count(*) > 1`,
-      );
-      expect(dup.rows).toEqual([]);
+    );
+    expect(dup.rows).toEqual([]);
 
-      // Shut the simulator down gracefully and pull its own accounting.
-      const exited = new Promise<number | null>((resolve) => sim?.once('exit', resolve));
-      sim?.kill('SIGTERM');
-      expect(await exited).toBe(0);
-      const done = /simulator done (\{.*\})/.exec(stderr);
-      expect(done, stderr.slice(-2000)).not.toBeNull();
-      const stats = JSON.parse(done![1]!) as Record<string, number>;
-      expect(stats['offers']).toBeGreaterThan(0);
-      expect(stats['tripsAssigned']).toBe(matched);
-      expect(stats['tripsCompleted']).toBe(completed);
-      console.log('e2e:', { requests: requestCounts, completed, sim: stats });
-    },
-    240_000,
-  );
+    // Shut the simulator down gracefully and pull its own accounting.
+    const exited = new Promise<number | null>((resolve) => sim?.once('exit', resolve));
+    sim?.kill('SIGTERM');
+    expect(await exited).toBe(0);
+    const done = /simulator done (\{.*\})/.exec(stderr);
+    expect(done, stderr.slice(-2000)).not.toBeNull();
+    const stats = JSON.parse(done![1]!) as Record<string, number>;
+    expect(stats['offers']).toBeGreaterThan(0);
+    expect(stats['tripsAssigned']).toBe(matched);
+    expect(stats['tripsCompleted']).toBe(completed);
+    console.log('e2e:', { requests: requestCounts, completed, sim: stats });
+  }, 240_000);
 });

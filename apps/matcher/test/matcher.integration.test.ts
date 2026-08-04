@@ -135,7 +135,9 @@ describe('matcher service (testcontainers redis + postgres)', () => {
   it('honest unmatched: zero candidates → status unmatched, counted and terminal', async () => {
     await insertRequests(['lonely']);
     expect(await newCore().matchRequest('lonely')).toBe('unmatched');
-    const res = await pool.query(`SELECT status, matched_trip_id FROM ride_requests WHERE id = 'lonely'`);
+    const res = await pool.query(
+      `SELECT status, matched_trip_id FROM ride_requests WHERE id = 'lonely'`,
+    );
     expect(res.rows[0]).toEqual({ status: 'unmatched', matched_trip_id: null });
     expect(cores[0]!.metrics.unmatchedTotal).toBe(1);
   });
@@ -167,7 +169,9 @@ describe('matcher service (testcontainers redis + postgres)', () => {
     const core = newCore();
     await core.start(1); // recoverProcessing runs first
     await waitFor(async () => {
-      const res = await pool.query<{ status: string }>(`SELECT status FROM ride_requests WHERE id = 'stuck'`);
+      const res = await pool.query<{ status: string }>(
+        `SELECT status FROM ride_requests WHERE id = 'stuck'`,
+      );
       return res.rows[0]?.status === 'matched';
     });
     expect(await redis.llen(REQUESTS_PROCESSING)).toBe(0);

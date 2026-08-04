@@ -2,7 +2,11 @@ import * as PopoverPrimitive from '@radix-ui/react-popover';
 import type { ReactElement, ReactNode } from 'react';
 import { cn } from '../../lib/utils.js';
 
-export function Popover(props: { trigger: ReactNode; children: ReactNode; label: string }): ReactElement {
+export function Popover(props: {
+  trigger: ReactNode;
+  children: ReactNode;
+  label: string;
+}): ReactElement {
   return (
     <PopoverPrimitive.Root>
       <PopoverPrimitive.Trigger asChild aria-label={props.label}>

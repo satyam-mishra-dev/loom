@@ -72,7 +72,14 @@ redis.call('ZADD', 'drivers:by-heartbeat', ARGV[5], ARGV[1])
 `;
 
 interface GeoIndexCommands {
-  flApplyPing(driverKey: string, driverId: string, cell: string, lat: number, lng: number, nowMs: number): unknown;
+  flApplyPing(
+    driverKey: string,
+    driverId: string,
+    cell: string,
+    lat: number,
+    lng: number,
+    nowMs: number,
+  ): unknown;
 }
 
 /**
@@ -109,7 +116,14 @@ export class GeoIndex {
     const pipeline = this.redis.pipeline();
     for (const [id, ping] of latest) {
       const cell = cellFor(ping.lat, ping.lng);
-      (pipeline as unknown as GeoIndexCommands).flApplyPing(driverKey(id), id, cell, ping.lat, ping.lng, nowMs);
+      (pipeline as unknown as GeoIndexCommands).flApplyPing(
+        driverKey(id),
+        id,
+        cell,
+        ping.lat,
+        ping.lng,
+        nowMs,
+      );
     }
     await pipeline.exec();
   }

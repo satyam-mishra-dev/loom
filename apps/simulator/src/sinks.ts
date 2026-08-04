@@ -121,7 +121,11 @@ export class WsSink implements Sink {
   }
 }
 
-export function createSink(kind: string, gatewayUrl: string, onMessage?: ServerMessageHandler): Sink {
+export function createSink(
+  kind: string,
+  gatewayUrl: string,
+  onMessage?: ServerMessageHandler,
+): Sink {
   switch (kind) {
     case 'ws':
       return new WsSink(gatewayUrl, onMessage);

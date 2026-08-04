@@ -13,7 +13,13 @@ function newSim(drivers = 1): Simulation {
 describe('offer decisions', () => {
   it('accept rate over many drivers approximates acceptProb, and is reproducible', () => {
     const draw = (): number => {
-      const sim = new Simulation({ drivers: 1000, ratePerSec: 0, hotspots: 0, seed: 11, acceptProb: 0.8 });
+      const sim = new Simulation({
+        drivers: 1000,
+        ratePerSec: 0,
+        hotspots: 0,
+        seed: 11,
+        acceptProb: 0.8,
+      });
       let accepts = 0;
       for (const agent of sim.agents) {
         if (sim.decideOffer(agent.id).accept) accepts++;
@@ -38,7 +44,12 @@ describe('offer decisions', () => {
   it('a driver already on a trip declines, and unknown drivers decline', () => {
     const sim = newSim();
     const agent = sim.agents[0]!;
-    sim.assignTrip(agent.id, 't1', toLatLng(sim.city, agent.pos), toLatLng(sim.city, { x: 0, y: 0 }));
+    sim.assignTrip(
+      agent.id,
+      't1',
+      toLatLng(sim.city, agent.pos),
+      toLatLng(sim.city, { x: 0, y: 0 }),
+    );
     expect(sim.decideOffer(agent.id).accept).toBe(false);
     expect(sim.decideOffer('ghost').accept).toBe(false);
   });
@@ -51,7 +62,9 @@ describe('trip driving', () => {
     // Pickup ~600m away, dest ~600m beyond that: reachable in bounded ticks.
     const pickup = { x: Math.min(agent.pos.x + 600, sim.city.widthM), y: agent.pos.y };
     const dest = { x: pickup.x, y: Math.min(agent.pos.y + 600, sim.city.heightM) };
-    expect(sim.assignTrip(agent.id, 't1', toLatLng(sim.city, pickup), toLatLng(sim.city, dest))).toBe(true);
+    expect(
+      sim.assignTrip(agent.id, 't1', toLatLng(sim.city, pickup), toLatLng(sim.city, dest)),
+    ).toBe(true);
     expect(agent.mode).toBe('to_pickup');
 
     const progress: TripProgress[] = [];

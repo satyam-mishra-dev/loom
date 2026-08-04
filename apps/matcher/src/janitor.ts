@@ -95,7 +95,10 @@ export class Janitor {
           if (requestId !== null) {
             await this.redis.lpush(REQUESTS_QUEUE, requestId);
             this.metrics.janitorRequeuedTotal++;
-            this.log.warn({ driverId, requestId }, 'claim key gone; reverted orphaned offered trip, re-enqueued');
+            this.log.warn(
+              { driverId, requestId },
+              'claim key gone; reverted orphaned offered trip, re-enqueued',
+            );
           } else {
             this.log.warn({ driverId, repaired: result.repaired }, 'claim key gone before sweep');
           }
@@ -107,9 +110,15 @@ export class Janitor {
         if (requestId !== null) {
           await this.redis.lpush(REQUESTS_QUEUE, requestId);
           this.metrics.janitorRequeuedTotal++;
-          this.log.warn({ driverId, tripId: result.tripId, requestId }, 'released expired claim, re-enqueued');
+          this.log.warn(
+            { driverId, tripId: result.tripId, requestId },
+            'released expired claim, re-enqueued',
+          );
         } else {
-          this.log.warn({ driverId, tripId: result.tripId }, 'released expired claim (trip already live/terminal)');
+          this.log.warn(
+            { driverId, tripId: result.tripId },
+            'released expired claim (trip already live/terminal)',
+          );
         }
       } catch (err) {
         this.metrics.sweepErrorsTotal++;

@@ -8,14 +8,14 @@ function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got "${raw}"`);
+  if (!Number.isFinite(n) || n <= 0)
+    throw new Error(`${name} must be a positive number, got "${raw}"`);
   return n;
 }
 
 const port = envInt('PORT', 8080);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
-const databaseUrl =
-  process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
+const databaseUrl = process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 // Default keeps `docker compose up` + local demo one-command; set
 // GATEWAY_SECRET for anything reachable beyond localhost.
 const secret = process.env['GATEWAY_SECRET'] ?? 'loom-dev-secret';

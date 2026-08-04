@@ -33,7 +33,10 @@ createServer((req, res) => {
     return;
   }
   // Strip query, prevent path traversal, default to index.html.
-  const rel = normalize(decodeURIComponent((req.url ?? '/').split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  const rel = normalize(decodeURIComponent((req.url ?? '/').split('?')[0])).replace(
+    /^(\.\.[/\\])+/,
+    '',
+  );
   const target = rel === '/' || rel === '' ? 'index.html' : rel.replace(/^\//, '');
   send(res, join(DIST, target)).catch(() =>
     // SPA fallback: serve index.html for unknown routes.

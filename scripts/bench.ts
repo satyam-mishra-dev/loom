@@ -67,7 +67,11 @@ function percentile(sortedAsc: number[], q: number): number {
   return sortedAsc[Math.min(sortedAsc.length - 1, Math.floor(q * sortedAsc.length))] ?? 0;
 }
 
-async function waitFor(cond: () => Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
+async function waitFor(
+  cond: () => Promise<boolean>,
+  timeoutMs: number,
+  what: string,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await cond())) {
     if (Date.now() > deadline) throw new Error(`bench waitFor timed out: ${what}`);
@@ -85,7 +89,9 @@ function spawnSim(url: string, args: string[]): ChildProcess {
 
 async function main(): Promise<void> {
   process.stderr.write('bench: starting Postgres + Redis containers…\n');
-  const [redisContainer, pgContainer] = await Promise.all<StartedRedisContainer | StartedPostgreSqlContainer>([
+  const [redisContainer, pgContainer] = await Promise.all<
+    StartedRedisContainer | StartedPostgreSqlContainer
+  >([
     new RedisContainer('redis:7-alpine').start(),
     new PostgreSqlContainer('postgres:16-alpine').start(),
   ]);
@@ -117,16 +123,26 @@ async function main(): Promise<void> {
       await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
 
       const sim = spawnSim(url, [
-        '--drivers', String(DRIVERS),
-        '--rps', String(rps),
-        '--hotspots', '0',
-        '--seed', String(SEED),
-        '--speedup', '1',
-        '--accept-prob', '1',
-        '--response-min-ms', '0',
-        '--response-max-ms', '0',
-        '--request-ticks', '600', // requests flow through warm-up + window; sim stays up
-        '--ticks', '0',
+        '--drivers',
+        String(DRIVERS),
+        '--rps',
+        String(rps),
+        '--hotspots',
+        '0',
+        '--seed',
+        String(SEED),
+        '--speedup',
+        '1',
+        '--accept-prob',
+        '1',
+        '--response-min-ms',
+        '0',
+        '--response-max-ms',
+        '0',
+        '--request-ticks',
+        '600', // requests flow through warm-up + window; sim stays up
+        '--ticks',
+        '0',
       ]);
 
       // Warm up: fleet fully indexed, channel subscriptions drained, cold-start
@@ -182,7 +198,8 @@ async function main(): Promise<void> {
         requests: matched + unmatched,
         matched,
         unmatched,
-        unmatchedRate: matched + unmatched > 0 ? Number((unmatched / (matched + unmatched)).toFixed(3)) : 0,
+        unmatchedRate:
+          matched + unmatched > 0 ? Number((unmatched / (matched + unmatched)).toFixed(3)) : 0,
         matchesPerSec: Number((matched / spanSec).toFixed(1)),
         p50Ms: Number(percentile(samples, 0.5).toFixed(2)),
         p95Ms: Number(percentile(samples, 0.95).toFixed(2)),
@@ -195,11 +212,16 @@ async function main(): Promise<void> {
     await redis.flushall();
     await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
     const geoSim = spawnSim(url, [
-      '--drivers', String(DRIVERS),
-      '--rps', '0',
-      '--seed', String(SEED),
-      '--speedup', '4',
-      '--ticks', '0',
+      '--drivers',
+      String(DRIVERS),
+      '--rps',
+      '0',
+      '--seed',
+      String(SEED),
+      '--speedup',
+      '4',
+      '--ticks',
+      '0',
     ]);
     await waitFor(
       async () => (await redis.zcard(HEARTBEAT_ZSET)) >= DRIVERS,
@@ -228,7 +250,11 @@ async function main(): Promise<void> {
     // continuing pings back to a whole index.
     const t0 = Date.now();
     await redis.flushall();
-    await waitFor(async () => (await redis.zcard(HEARTBEAT_ZSET)) >= DRIVERS, 30_000, 'index self-heal');
+    await waitFor(
+      async () => (await redis.zcard(HEARTBEAT_ZSET)) >= DRIVERS,
+      30_000,
+      'index self-heal',
+    );
     const selfHealMs = Date.now() - t0;
     geoSim.kill('SIGKILL');
 

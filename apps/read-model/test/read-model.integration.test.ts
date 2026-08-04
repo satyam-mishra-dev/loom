@@ -110,7 +110,12 @@ describe('read model (testcontainers redis + postgres)', () => {
     await seedEnRouteTrip();
     for (let i = 0; i < 8; i++) await surge.recordDemand(CELL, `r${i}`, Date.now());
 
-    const rm = buildReadModel({ redis, pool, driverCap: 2, matcherMetricsUrl: 'http://127.0.0.1:1/none' });
+    const rm = buildReadModel({
+      redis,
+      pool,
+      driverCap: 2,
+      matcherMetricsUrl: 'http://127.0.0.1:1/none',
+    });
     const snap = await rm.buildSnapshot();
 
     // Drivers bounded to the cap; the true total still reported.
@@ -132,7 +137,12 @@ describe('read model (testcontainers redis + postgres)', () => {
 
   it('SSE /events streams periodic snapshots', async () => {
     await seedFleet(3);
-    const rm = buildReadModel({ redis, pool, tickMs: 300, matcherMetricsUrl: 'http://127.0.0.1:1/none' });
+    const rm = buildReadModel({
+      redis,
+      pool,
+      tickMs: 300,
+      matcherMetricsUrl: 'http://127.0.0.1:1/none',
+    });
     await rm.app.listen({ port: 0, host: '127.0.0.1' });
     rm.start();
     try {
@@ -148,7 +158,11 @@ describe('read model (testcontainers redis + postgres)', () => {
 
   it('POST /spawn injects real ride requests into intake (row + queue + demand)', async () => {
     const rm = buildReadModel({ redis, pool, matcherMetricsUrl: 'http://127.0.0.1:1/none' });
-    const res = await rm.app.inject({ method: 'POST', url: '/spawn', payload: { n: 10, hotspot: true } });
+    const res = await rm.app.inject({
+      method: 'POST',
+      url: '/spawn',
+      payload: { n: 10, hotspot: true },
+    });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ spawned: 10, hotspot: true });
 
@@ -174,9 +188,17 @@ describe('read model (testcontainers redis + postgres)', () => {
       const port = (rm.app.server.address() as AddressInfo).port;
 
       // /spawn: no token and wrong token are rejected; the right token works.
-      expect((await rm.app.inject({ method: 'POST', url: '/spawn', payload: { n: 1 } })).statusCode).toBe(401);
-      expect((await rm.app.inject({ method: 'POST', url: '/spawn?token=nope', payload: { n: 1 } })).statusCode).toBe(401);
-      expect((await rm.app.inject({ method: 'POST', url: '/spawn?token=secret', payload: { n: 1 } })).statusCode).toBe(200);
+      expect(
+        (await rm.app.inject({ method: 'POST', url: '/spawn', payload: { n: 1 } })).statusCode,
+      ).toBe(401);
+      expect(
+        (await rm.app.inject({ method: 'POST', url: '/spawn?token=nope', payload: { n: 1 } }))
+          .statusCode,
+      ).toBe(401);
+      expect(
+        (await rm.app.inject({ method: 'POST', url: '/spawn?token=secret', payload: { n: 1 } }))
+          .statusCode,
+      ).toBe(200);
 
       // /events without a token is rejected before the SSE hijack.
       expect((await rm.app.inject({ method: 'GET', url: '/events' })).statusCode).toBe(401);

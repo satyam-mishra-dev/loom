@@ -64,7 +64,11 @@ describe('demo mechanisms (testcontainers redis + postgres)', () => {
     // It cleaned up after itself — no proof rows or drivers linger.
     const rows = await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM ride_requests');
     expect(rows.rows[0]?.n).toBe(0);
-    expect(await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM trips').then((r) => r.rows[0]?.n)).toBe(0);
+    expect(
+      await pool
+        .query<{ n: number }>('SELECT count(*)::int AS n FROM trips')
+        .then((r) => r.rows[0]?.n),
+    ).toBe(0);
     expect(await redis.zcard('drivers:by-heartbeat')).toBe(0);
   }, 120_000);
 
@@ -104,7 +108,12 @@ describe('demo mechanisms (testcontainers redis + postgres)', () => {
 
     await cleanupCrash(deps, handle);
     const gone = await crashSnapshot(deps, handle);
-    expect(gone).toMatchObject({ claimPresent: false, tripStatus: null, requestStatus: null, driverStatus: null });
+    expect(gone).toMatchObject({
+      claimPresent: false,
+      tripStatus: null,
+      requestStatus: null,
+      driverStatus: null,
+    });
     expect(await redis.lrange('requests:queue', 0, -1)).not.toContain(handle.requestId);
   }, 60_000);
 

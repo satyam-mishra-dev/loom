@@ -34,7 +34,9 @@ describe('GcraLimiter (testcontainers redis)', () => {
     // emission = 60s/20 = 3s per unit, so redis TIME advancing a few ms across
     // the 200 calls admits zero extras — the count is the burst, exactly.
     const cfg = { limit: 20, windowMs: 60_000, burst: 20 };
-    const results = await Promise.all(Array.from({ length: 200 }, () => limiter.limit('rider-hot', cfg)));
+    const results = await Promise.all(
+      Array.from({ length: 200 }, () => limiter.limit('rider-hot', cfg)),
+    );
     const allowed = results.filter((r) => r.allowed);
     expect(allowed).toHaveLength(20);
     expect(results.filter((r) => !r.allowed)).toHaveLength(180);
