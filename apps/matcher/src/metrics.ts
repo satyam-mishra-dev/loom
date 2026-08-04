@@ -23,6 +23,8 @@ export interface MatcherMetrics {
   cascadeLostTotal: number;
   /** Trips advanced to completed by the progression consumer. */
   tripsCompletedTotal: number;
+  /** Rides cancelled by the rider (mid-offer or mid-trip). */
+  ridesCancelledTotal: number;
   /** trip_progress messages the machine guards refused (duplicate/stale/spoof/terminal). */
   tripEventGuardFailuresTotal: number;
   /** trip_progress events re-queued because a predecessor had not landed yet (cross-instance reorder). */
@@ -46,6 +48,7 @@ export function createMetrics(): MatcherMetrics {
     offerTimeoutsTotal: 0,
     cascadeLostTotal: 0,
     tripsCompletedTotal: 0,
+    ridesCancelledTotal: 0,
     tripEventGuardFailuresTotal: 0,
     tripEventPrematureTotal: 0,
     matchLatencyMs: new Hist(),
@@ -94,6 +97,7 @@ export function renderMetrics(m: MatcherMetrics, j?: JanitorMetrics): string {
     ...renderCounter('offer_timeouts_total', m.offerTimeoutsTotal),
     ...renderCounter('cascade_lost_total', m.cascadeLostTotal),
     ...renderCounter('trips_completed_total', m.tripsCompletedTotal),
+    ...renderCounter('rides_cancelled_total', m.ridesCancelledTotal),
     ...renderCounter('trip_event_guard_failures_total', m.tripEventGuardFailuresTotal),
     ...renderCounter('trip_event_premature_total', m.tripEventPrematureTotal),
     ...renderSummary('match_latency_ms', m.matchLatencyMs),

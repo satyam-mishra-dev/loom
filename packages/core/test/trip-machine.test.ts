@@ -33,23 +33,35 @@ const EVENTS: TripEvent[] = [
   { type: 'ARRIVED_PICKUP' },
   { type: 'TRIP_DONE' },
   { type: 'UNMATCHED' },
+  { type: 'RIDER_CANCELLED' },
 ];
+
+// Rider cancellation is legal from every non-terminal state → cancelled.
+const RIDER_CANCEL: TripState = { status: 'cancelled', reason: 'rider_cancelled' };
 
 // status → event type → expected next state. Everything absent is illegal.
 const LEGAL: Record<string, Partial<Record<TripEvent['type'], TripState>>> = {
-  requested: { MATCHING_STARTED: { status: 'matching' } },
+  requested: { MATCHING_STARTED: { status: 'matching' }, RIDER_CANCELLED: RIDER_CANCEL },
   matching: {
     OFFER_SENT: { status: 'offered', driverId: 'd1', offerId: 'o1' },
     UNMATCHED: { status: 'cancelled', reason: 'unmatched' },
+    RIDER_CANCELLED: RIDER_CANCEL,
   },
   offered: {
     OFFER_ACCEPTED: { status: 'matched', driverId: 'd1' },
     OFFER_DECLINED: { status: 'matching' },
     OFFER_TIMED_OUT: { status: 'matching' },
+    RIDER_CANCELLED: RIDER_CANCEL,
   },
-  matched: { DRIVER_EN_ROUTE: { status: 'en_route', driverId: 'd1' } },
-  en_route: { ARRIVED_PICKUP: { status: 'in_trip', driverId: 'd1' } },
-  in_trip: { TRIP_DONE: { status: 'completed', driverId: 'd1' } },
+  matched: {
+    DRIVER_EN_ROUTE: { status: 'en_route', driverId: 'd1' },
+    RIDER_CANCELLED: RIDER_CANCEL,
+  },
+  en_route: {
+    ARRIVED_PICKUP: { status: 'in_trip', driverId: 'd1' },
+    RIDER_CANCELLED: RIDER_CANCEL,
+  },
+  in_trip: { TRIP_DONE: { status: 'completed', driverId: 'd1' }, RIDER_CANCELLED: RIDER_CANCEL },
   completed: {},
   cancelled: {},
 };

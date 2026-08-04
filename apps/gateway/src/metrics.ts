@@ -25,6 +25,8 @@ export interface GatewayMetrics {
   forwardDropsTotal: number;
   offerRepliesTotal: number;
   tripProgressTotal: number;
+  /** Rider cancellations forwarded to the matcher's cancel queue. */
+  rideCancelsTotal: number;
   replyErrorsTotal: number;
   batchSize: Hist;
   flushLatencyMs: Hist;
@@ -52,6 +54,7 @@ export function createMetrics(): GatewayMetrics {
     forwardDropsTotal: 0,
     offerRepliesTotal: 0,
     tripProgressTotal: 0,
+    rideCancelsTotal: 0,
     replyErrorsTotal: 0,
     batchSize: new Hist(),
     flushLatencyMs: new Hist(),
@@ -80,6 +83,7 @@ export function renderMetrics(m: GatewayMetrics, limiter?: LimiterMetrics): stri
     ...renderCounter('forward_drops_total', m.forwardDropsTotal),
     ...renderCounter('offer_replies_total', m.offerRepliesTotal),
     ...renderCounter('trip_progress_total', m.tripProgressTotal),
+    ...renderCounter('ride_cancels_total', m.rideCancelsTotal),
     ...renderCounter('reply_errors_total', m.replyErrorsTotal),
     ...renderSummary('ping_batch_size', m.batchSize),
     ...renderSummary('ping_flush_latency_ms', m.flushLatencyMs),

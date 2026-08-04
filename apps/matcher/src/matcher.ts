@@ -3,6 +3,8 @@ import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import {
+  CANCEL_PROCESSING,
+  CANCEL_QUEUE,
   ClaimStore,
   DEFAULT_CLAIM_TTL_MS,
   DEFAULT_OFFER_TTL_MS,
@@ -23,7 +25,7 @@ import {
   type TripAssigned,
 } from '@loom/core';
 import { createMetrics, type MatcherMetrics } from './metrics.js';
-import { TripStore } from './trip-store.js';
+import { TripStore, type CancelResult } from './trip-store.js';
 
 export interface MatcherOptions {
   redis: Redis;
@@ -310,6 +312,51 @@ export class MatcherCore {
     return 'unmatched';
   }
 
+  /**
+   * Rider cancellation, race-safe with the atomic claim, the offer cascade, and
+   * the janitor. The trips row is the authority: cancelRide flips it (and the
+   * request) to cancelled in one locked TX, which STOPS an in-flight cascade —
+   * its next guarded write sees the request/trip no longer 'matching'/'offered'
+   * and backs off (same path as a peer stealing the request). Only then is the
+   * bound driver freed in Redis, token-guarded so a driver already re-claimed
+   * for another trip is never touched. Idempotent: cancelling an already-terminal
+   * ride is a no-op. Never double-frees or strands a driver.
+   */
+  async cancelRide(requestId: string): Promise<CancelResult> {
+    const result = await this.trips.cancelRide(requestId);
+    if (result.outcome === 'cancelled') {
+      this.metrics.ridesCancelledTotal++;
+      if (result.driverId !== null && result.claimToken !== null) {
+        await this.claims.cancelDriver(result.driverId, result.claimToken);
+      }
+      this.log.info({ requestId, driverId: result.driverId }, 'ride cancelled');
+    }
+    return result;
+  }
+
+  /** Consume rider cancellations: same at-least-once list pattern; cancelRide is idempotent. */
+  private async cancelLoop(conn: Redis): Promise<void> {
+    while (!this.stopped) {
+      let requestId: string | null;
+      try {
+        requestId = await conn.blmove(CANCEL_QUEUE, CANCEL_PROCESSING, 'RIGHT', 'LEFT', 1);
+      } catch (err) {
+        if (this.stopped) return;
+        this.log.error({ err }, 'cancel pop failed');
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      if (requestId === null) continue;
+      try {
+        await this.cancelRide(requestId);
+        await this.redis.lrem(CANCEL_PROCESSING, 1, requestId);
+      } catch (err) {
+        this.metrics.matchErrorsTotal++;
+        this.log.error({ err, requestId }, 'cancel failed; left in processing');
+      }
+    }
+  }
+
   /** BLPOP the offer's reply list: true = accept, false = decline, null = timeout. */
   private async awaitReply(conn: Redis, offerId: string): Promise<boolean | null> {
     const res = await conn.blpop(offerReplyKey(offerId), this.offerTtlMs / 1000);
@@ -337,6 +384,9 @@ export class MatcherCore {
     const tripConn = this.redis.duplicate();
     this.conns.push(tripConn);
     this.loops.push(this.tripEventLoop(tripConn));
+    const cancelConn = this.redis.duplicate();
+    this.conns.push(cancelConn);
+    this.loops.push(this.cancelLoop(cancelConn));
   }
 
   /** Stops within ~1s (the BLMOVE timeout). In-flight matches finish first. */
@@ -368,6 +418,9 @@ export class MatcherCore {
     while (
       (await this.redis.lmove(TRIP_EVENTS_PROCESSING, TRIP_EVENTS_QUEUE, 'LEFT', 'RIGHT')) !== null
     ) {
+      recovered++;
+    }
+    while ((await this.redis.lmove(CANCEL_PROCESSING, CANCEL_QUEUE, 'LEFT', 'RIGHT')) !== null) {
       recovered++;
     }
     // Requests stranded past the grace window. 'pending' rows lost their LPUSH;

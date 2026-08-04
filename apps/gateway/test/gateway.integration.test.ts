@@ -9,6 +9,7 @@ import type pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import {
+  CANCEL_QUEUE,
   HEARTBEAT_ZSET,
   REQUESTS_QUEUE,
   SurgeStore,
@@ -320,6 +321,20 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       await waitFor(() => gw.metrics.invalidMessagesTotal === 2);
       expect(await redis.exists(offerReplyKey('o2'))).toBe(0);
       expect(await redis.llen(TRIP_EVENTS_QUEUE)).toBe(1);
+    });
+
+    it('ride_cancel enqueues the requestId on the cancel queue; malformed is invalid', async () => {
+      const { gw, port } = await startGateway();
+      const ws = await connect(port, signToken('rider', SECRET));
+
+      ws.send(JSON.stringify({ type: 'ride_cancel', requestId: 'r1' }));
+      await waitFor(() => gw.metrics.rideCancelsTotal === 1);
+      expect(await redis.lrange(CANCEL_QUEUE, 0, -1)).toEqual(['r1']);
+
+      // No requestId → counted invalid, nothing enqueued.
+      ws.send(JSON.stringify({ type: 'ride_cancel' }));
+      await waitFor(() => gw.metrics.invalidMessagesTotal === 1);
+      expect(await redis.llen(CANCEL_QUEUE)).toBe(1);
     });
   });
 

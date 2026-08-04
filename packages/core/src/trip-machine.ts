@@ -38,7 +38,7 @@ export type TripState =
   | { status: 'en_route'; driverId: string }
   | { status: 'in_trip'; driverId: string }
   | { status: 'completed'; driverId: string }
-  | { status: 'cancelled'; reason: 'unmatched' };
+  | { status: 'cancelled'; reason: 'unmatched' | 'rider_cancelled' };
 
 export type TripEvent =
   | { type: 'MATCHING_STARTED' }
@@ -49,7 +49,8 @@ export type TripEvent =
   | { type: 'DRIVER_EN_ROUTE' }
   | { type: 'ARRIVED_PICKUP' }
   | { type: 'TRIP_DONE' }
-  | { type: 'UNMATCHED' };
+  | { type: 'UNMATCHED' }
+  | { type: 'RIDER_CANCELLED' };
 
 export class IllegalTransitionError extends Error {
   constructor(
@@ -68,6 +69,15 @@ export function initialTripState(): TripState {
 
 /** Pure transition function. Returns the next state or throws IllegalTransitionError. */
 export function transition(state: TripState, event: TripEvent): TripState {
+  // The rider may cancel from any non-terminal state (before a match, mid-offer,
+  // or mid-trip); the two terminal states refuse it. Handled up front so it
+  // applies uniformly without threading a case through every status below.
+  if (event.type === 'RIDER_CANCELLED') {
+    if (state.status === 'completed' || state.status === 'cancelled') {
+      throw new IllegalTransitionError(state.status, event.type);
+    }
+    return { status: 'cancelled', reason: 'rider_cancelled' };
+  }
   switch (state.status) {
     case 'requested':
       if (event.type === 'MATCHING_STARTED') return { status: 'matching' };

@@ -20,6 +20,19 @@ import {
 export type AcceptResult = 'matched' | 'conflict' | 'lost';
 
 /**
+ * Outcome of a rider cancellation. `driverId`/`claimToken` are non-null only
+ * when a live claim or assignment must be released in Redis — i.e. the trip was
+ * mid-offer or mid-trip with a driver genuinely bound to it; a not-yet-matched
+ * request, or a trip parked at 'matching' (its driver_id a released ghost),
+ * carries null so no unrelated driver is ever freed.
+ */
+export interface CancelResult {
+  outcome: 'cancelled' | 'already_terminal' | 'not_found';
+  driverId: string | null;
+  claimToken: string | null;
+}
+
+/**
  * Outcome of a driver-reported milestone (progress):
  *  - 'applied'   the transition was legal and committed;
  *  - 'premature' a predecessor event has not landed yet (cross-instance
@@ -417,6 +430,71 @@ export class TripStore {
       [limit],
     );
     return res.rows.map((r) => r.driver_id);
+  }
+
+  /**
+   * Rider cancellation. One locked TX flips the trip (and its request) to
+   * cancelled; that write is what STOPS an in-flight cascade — its next guarded
+   * step (accept/revert/unmatched) then sees a non-'matching' request or a
+   * non-'offered' trip and backs off, exactly as it does when a peer steals the
+   * request. Lock order is trip-then-request, matching every other trip-store
+   * TX, so a concurrent accept/janitor cannot deadlock against this one.
+   *
+   *   - no trip yet (request pending/matching): cancel the request outright;
+   *   - trip offered/matched/en_route/in_trip: cancel it, return the bound
+   *     driver + claim token so the caller frees it in Redis;
+   *   - trip parked at matching: cancel it, but driver_id is a released ghost —
+   *     return null so no driver is touched;
+   *   - already terminal (completed/cancelled/unmatched): no-op.
+   */
+  async cancelRide(requestId: string): Promise<CancelResult> {
+    const noDriver = { driverId: null, claimToken: null };
+    return this.inTx(async (client) => {
+      const trip = await client.query<TripRow & { claim_token: string }>(
+        `SELECT id, status, driver_id, offer_id, request_id, claim_token
+         FROM trips WHERE request_id = $1 FOR UPDATE`,
+        [requestId],
+      );
+      const req = await client.query<{ status: string }>(
+        'SELECT status FROM ride_requests WHERE id = $1 FOR UPDATE',
+        [requestId],
+      );
+      const reqStatus = req.rows[0]?.status;
+      if (reqStatus === undefined) return { outcome: 'not_found', ...noDriver };
+
+      const row = trip.rows[0];
+      if (row === undefined) {
+        // No trip row: cancellable only while the request is still open.
+        if (reqStatus === 'pending' || reqStatus === 'matching') {
+          await client.query(`UPDATE ride_requests SET status = 'cancelled' WHERE id = $1`, [
+            requestId,
+          ]);
+          return { outcome: 'cancelled', ...noDriver };
+        }
+        return { outcome: 'already_terminal', ...noDriver };
+      }
+      if (row.status === 'completed' || row.status === 'cancelled') {
+        return { outcome: 'already_terminal', ...noDriver };
+      }
+
+      const next = transition(rowState(row), { type: 'RIDER_CANCELLED' });
+      await client.query('UPDATE trips SET status = $2 WHERE id = $1', [row.id, next.status]);
+      await client.query(`UPDATE ride_requests SET status = 'cancelled' WHERE id = $1`, [
+        requestId,
+      ]);
+      await this.insertEvent(client, row.id, next.status, {
+        event: 'RIDER_CANCELLED',
+        driverId: row.driver_id,
+      });
+      // 'matching' means the last offer already reverted — driver_id is a
+      // released ghost, not ours to free. Every other live status owns its driver.
+      const owned = row.status !== 'matching';
+      return {
+        outcome: 'cancelled',
+        driverId: owned ? row.driver_id : null,
+        claimToken: owned ? row.claim_token : null,
+      };
+    });
   }
 
   /** Shared guarded single-edge apply: lock, machine-check, write status + outbox. */

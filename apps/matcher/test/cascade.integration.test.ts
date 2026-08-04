@@ -4,6 +4,8 @@ import { Redis } from 'ioredis';
 import type pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CANCEL_PROCESSING,
+  CANCEL_QUEUE,
   CLAIMS_BY_EXPIRY,
   ClaimStore,
   GeoIndex,
@@ -522,6 +524,151 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
     expect(await redis.lrange(REQUESTS_QUEUE, 0, -1)).toContain('r1');
     expect(janitor.metrics.janitorGoneTotal).toBe(1);
     expect(janitor.metrics.janitorRequeuedTotal).toBe(1);
+  });
+
+  it('cancel mid-offer: cascade stops, the claimed driver is released, request cancelled, never assigned', async () => {
+    await seedDrivers(1);
+    await insertRequest('r1');
+    const claims = new ClaimStore(redis);
+    const trips = new TripStore(pool);
+    // Stage the exact mid-offer state: request 'matching', driver claimed, trip
+    // 'offered' — a live offer in flight.
+    await pool.query(`UPDATE ride_requests SET status = 'matching' WHERE id = 'r1'`);
+    const token = await claims.claimDriver('d0', 'trip-1', Date.now(), 10_000, 4_000);
+    await trips.offerTrip({
+      tripId: 'trip-1',
+      requestId: 'r1',
+      driverId: 'd0',
+      offerId: 'off-1',
+      claimToken: token!,
+      rider: CENTER,
+    });
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('claimed');
+
+    const core = newCore();
+    expect((await core.cancelRide('r1')).outcome).toBe('cancelled');
+
+    expect((await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]).toEqual({
+      status: 'cancelled',
+    });
+    expect((await pool.query(`SELECT status FROM ride_requests WHERE id = 'r1'`)).rows[0]).toEqual({
+      status: 'cancelled',
+    });
+    // Driver never assigned: released back to available in its cell, claim gone.
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('available');
+    expect(await redis.smembers(cellKey(C0))).toEqual(['d0']);
+    expect(await redis.exists(claimKey('d0'))).toBe(0);
+    expect(await redis.zcard(CLAIMS_BY_EXPIRY)).toBe(0);
+    expect(fleet.assigned).toHaveLength(0);
+    expect(core.metrics.ridesCancelledTotal).toBe(1);
+    expect((await eventChain('trip-1')).at(-1)).toBe('cancelled');
+  });
+
+  it('cancel mid-trip: trip cancelled, the on-trip driver returns to available (no strand, idempotent)', async () => {
+    await seedDrivers(1);
+    await pool.query(
+      `INSERT INTO ride_requests (id, lat, lng, dest_lat, dest_lng, status) VALUES ('r1', $1, $2, $3, $4, 'matched')`,
+      [CENTER.lat, CENTER.lng, DEST.lat, DEST.lng],
+    );
+    await pool.query(
+      `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token, offer_id)
+       VALUES ('trip-1', 'r1', 'd0', $1, $2, 'en_route', 'tok', 'off-1')`,
+      [CENTER.lat, CENTER.lng],
+    );
+    await redis.hset(driverKey('d0'), { status: 'on_trip' });
+    await redis.srem(cellKey(C0), 'd0');
+
+    const core = newCore();
+    const res = await core.cancelRide('r1');
+    expect(res.outcome).toBe('cancelled');
+    expect(res.driverId).toBe('d0');
+
+    expect((await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]).toEqual({
+      status: 'cancelled',
+    });
+    expect((await pool.query(`SELECT status FROM ride_requests WHERE id = 'r1'`)).rows[0]).toEqual({
+      status: 'cancelled',
+    });
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('available');
+    expect(await redis.smembers(cellKey(C0))).toEqual(['d0']);
+
+    // Cancelling the terminal trip again frees nothing and stays cancelled.
+    expect((await core.cancelRide('r1')).outcome).toBe('already_terminal');
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('available');
+    expect(await redis.smembers(cellKey(C0))).toEqual(['d0']);
+  });
+
+  it('cancel an already-completed trip is a safe no-op', async () => {
+    await seedDrivers(1);
+    await pool.query(
+      `INSERT INTO ride_requests (id, lat, lng, status) VALUES ('r1', $1, $2, 'matched')`,
+      [CENTER.lat, CENTER.lng],
+    );
+    await pool.query(
+      `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token)
+       VALUES ('trip-1', 'r1', 'd0', $1, $2, 'completed', 'tok')`,
+      [CENTER.lat, CENTER.lng],
+    );
+
+    const core = newCore();
+    expect((await core.cancelRide('r1')).outcome).toBe('already_terminal');
+    expect((await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]).toEqual({
+      status: 'completed',
+    });
+    expect(core.metrics.ridesCancelledTotal).toBe(0);
+  });
+
+  it('cancel before matching: request cancelled with no trip, and the matcher then skips it', async () => {
+    await seedDrivers(1);
+    await insertRequest('r1'); // pending, no trip row yet
+
+    const core = newCore();
+    expect(await core.cancelRide('r1')).toEqual({
+      outcome: 'cancelled',
+      driverId: null,
+      claimToken: null,
+    });
+    expect((await pool.query(`SELECT status FROM ride_requests WHERE id = 'r1'`)).rows[0]).toEqual({
+      status: 'cancelled',
+    });
+    expect(
+      (await pool.query(`SELECT count(*)::int AS n FROM trips WHERE request_id = 'r1'`)).rows[0],
+    ).toEqual({ n: 0 });
+
+    // A matcher that pops the cancelled request assigns nobody (the guard misses).
+    expect(await core.matchRequest('r1')).toBe('skipped');
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('available');
+  });
+
+  it('the cancel queue drives cancellation end to end through the running matcher', async () => {
+    await seedDrivers(1);
+    await insertRequest('r1');
+    const claims = new ClaimStore(redis);
+    const trips = new TripStore(pool);
+    await pool.query(`UPDATE ride_requests SET status = 'matching' WHERE id = 'r1'`);
+    const token = await claims.claimDriver('d0', 'trip-1', Date.now(), 10_000, 60_000);
+    await trips.offerTrip({
+      tripId: 'trip-1',
+      requestId: 'r1',
+      driverId: 'd0',
+      offerId: 'off-1',
+      claimToken: token!,
+      rider: CENTER,
+    });
+
+    const core = newCore();
+    await core.start(1);
+    await redis.lpush(CANCEL_QUEUE, 'r1');
+
+    await waitFor(
+      async () =>
+        (await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]?.status ===
+        'cancelled',
+    );
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('available');
+    expect(await redis.exists(claimKey('d0'))).toBe(0);
+    await waitFor(async () => (await redis.llen(CANCEL_PROCESSING)) === 0); // acked
+    expect(core.metrics.ridesCancelledTotal).toBe(1);
   });
 
   it('C2: two instances, trip_done consumed before arrived_pickup — driver ends freed, trip completed', async () => {

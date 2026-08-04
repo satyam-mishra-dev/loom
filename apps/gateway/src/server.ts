@@ -5,6 +5,7 @@ import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  CANCEL_QUEUE,
   DegradingLimiter,
   GeoIndex,
   OFFER_REPLY_TTL_MS,
@@ -99,7 +100,8 @@ type InboundMessage =
       tripId: string;
       driverId: string;
       event: 'arrived_pickup' | 'trip_done';
-    };
+    }
+  | { kind: 'ride_cancel'; requestId: string };
 
 // Coordinate guards at the trust boundary: finiteness is NOT enough. h3-js's
 // latLngToCell silently WRAPS an out-of-range coordinate into a valid cell
@@ -149,6 +151,11 @@ function parseMessage(raw: unknown): InboundMessage | null {
       if (!nonEmptyString(tripId) || !nonEmptyString(driverId)) return null;
       if (event !== 'arrived_pickup' && event !== 'trip_done') return null;
       return { kind: 'trip_progress', tripId, driverId, event };
+    }
+    case 'ride_cancel': {
+      const requestId = msg['requestId'];
+      if (!nonEmptyString(requestId)) return null;
+      return { kind: 'ride_cancel', requestId };
     }
     default:
       return null;
@@ -335,6 +342,20 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     }
   }
 
+  // Rider cancellation: enqueue the requestId for the matcher, which owns the
+  // race-safe cancel (trip machine + claim). Same trust as ride-request intake —
+  // any authenticated principal may act on a requestId — and the matcher's
+  // cancelRide is idempotent, so a stray duplicate is a no-op.
+  async function forwardCancel(requestId: string): Promise<void> {
+    try {
+      await redis.lpush(CANCEL_QUEUE, requestId);
+      metrics.rideCancelsTotal++;
+    } catch (err) {
+      metrics.replyErrorsTotal++;
+      app.log.error({ err, requestId }, 'ride cancel forward failed');
+    }
+  }
+
   // ---- socket registry + bounded outbound path ----
   const driverSockets = new Map<string, WebSocket>();
 
@@ -493,6 +514,10 @@ export function buildGateway(opts: GatewayOptions): Gateway {
           return;
         }
         void forwardTripProgress(msg.tripId, msg.driverId, msg.event);
+        return;
+      }
+      if (msg.kind === 'ride_cancel') {
+        void forwardCancel(msg.requestId);
         return;
       }
       metrics.pingsReceivedTotal++;

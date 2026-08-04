@@ -114,3 +114,12 @@ export const OFFER_REPLY_TTL_MS = 60_000;
  */
 export const TRIP_EVENTS_QUEUE = 'trip:events';
 export const TRIP_EVENTS_PROCESSING = 'trip:events:processing';
+
+/**
+ * Rider-cancellation queue (gateway → matcher), same LPUSH/BLMOVE/LREM list
+ * pattern as request intake. The gateway enqueues the cancelled requestId; the
+ * matcher runs the race-safe cancel against the trip machine + claim. cancelRide
+ * is idempotent, so a duplicate delivery is a harmless no-op.
+ */
+export const CANCEL_QUEUE = 'cancel:queue';
+export const CANCEL_PROCESSING = 'cancel:processing';

@@ -195,6 +195,41 @@ end
 return {'released', claim.tripId}
 `;
 
+// KEYS[1] claim:{id}  KEYS[2] driver:{id}
+// ARGV[1] driverId  ARGV[2] claimToken
+// Free the driver a CANCELLED trip owned, atomically. Two owned shapes:
+//   - a live claim carrying our token (trip 'offered', or 'matched' before
+//     confirm ran): delete it, de-index it, and return the still-'claimed'
+//     driver to its cell's available set (releaseClaim's move);
+//   - the claim already consumed at confirm ('matched'/'en_route'/'in_trip'):
+//     no claim key, so free the 'on_trip' driver — this trip's driver by the
+//     partial-unique index — back to available (freeDriver's move).
+// A claim whose token differs, or any other status, is left untouched: this
+// never resurrects a driver that isn't ours, so it can't cause a double-book.
+const CANCEL_DRIVER_LUA = `
+local status = redis.call('HGET', KEYS[2], 'status')
+local raw = redis.call('GET', KEYS[1])
+if raw then
+  local claim = cjson.decode(raw)
+  if claim.token == ARGV[2] then
+    redis.call('DEL', KEYS[1])
+    redis.call('ZREM', 'claims:by-expiry', ARGV[1])
+    if status == 'claimed' then
+      redis.call('HSET', KEYS[2], 'status', 'available')
+      local cell = redis.call('HGET', KEYS[2], 'cell')
+      if cell then redis.call('SADD', 'cell:' .. cell .. ':available', ARGV[1]) end
+    end
+  end
+  return status or ''
+end
+if status == 'on_trip' then
+  redis.call('HSET', KEYS[2], 'status', 'available')
+  local cell = redis.call('HGET', KEYS[2], 'cell')
+  if cell then redis.call('SADD', 'cell:' .. cell .. ':available', ARGV[1]) end
+end
+return status or ''
+`;
+
 /** Methods defineCommand installs on the client — typed here, zero `any`. */
 interface ClaimCommands {
   flClaimDriver(
@@ -222,6 +257,12 @@ interface ClaimCommands {
     token: string,
   ): Promise<number>;
   flFreeDriver(driverKey: string, driverId: string): Promise<number>;
+  flCancelDriver(
+    claimKey: string,
+    driverKey: string,
+    driverId: string,
+    claimToken: string,
+  ): Promise<string>;
   flJanitorRelease(
     claimKey: string,
     driverKey: string,
@@ -242,6 +283,7 @@ export class ClaimStore {
     redis.defineCommand('flConfirmClaim', { numberOfKeys: 2, lua: CONFIRM_LUA });
     redis.defineCommand('flReleaseClaim', { numberOfKeys: 2, lua: RELEASE_LUA });
     redis.defineCommand('flFreeDriver', { numberOfKeys: 1, lua: FREE_LUA });
+    redis.defineCommand('flCancelDriver', { numberOfKeys: 2, lua: CANCEL_DRIVER_LUA });
     redis.defineCommand('flJanitorRelease', { numberOfKeys: 2, lua: JANITOR_LUA });
     this.redis = redis as Redis & ClaimCommands;
   }
@@ -311,6 +353,17 @@ export class ClaimStore {
   /** Trip completed: on_trip → available in the driver's current cell. No-op unless on_trip. */
   async freeDriver(driverId: string): Promise<boolean> {
     return (await this.redis.flFreeDriver(driverKey(driverId), driverId)) === 1;
+  }
+
+  /**
+   * Rider cancelled the trip this driver owned: release its claim (offered /
+   * matched-before-confirm) OR free it from on_trip (matched/en_route/in_trip),
+   * whichever applies, in one atomic step. Token-guarded so a driver already
+   * re-claimed for a different trip is never touched. Returns the driver's
+   * status before the free (for logging); idempotent on repeat calls.
+   */
+  async cancelDriver(driverId: string, claimToken: string): Promise<string> {
+    return this.redis.flCancelDriver(claimKey(driverId), driverKey(driverId), driverId, claimToken);
   }
 
   /** Drivers whose claims have expired per the ZSET — the janitor's worklist. */
