@@ -115,7 +115,7 @@ Docker; writes `scripts/bench-results.json`).
 
 ## Demo
 
-A 90-second script for the recorded walkthrough lives in
+A 90-second walkthrough script lives in
 [`docs/demo.md`](docs/demo.md): spawn a hotspot burst, watch a cell surge past
 1×, kill the matcher and watch the janitor recover, then cut to the green
 signature test.
