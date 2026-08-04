@@ -131,9 +131,20 @@ export class GeoIndex {
   /**
    * Drivers whose heartbeat is older than staleMs: remove from their available
    * set, mark offline, drop from the heartbeat ZSET (a returning ping re-adds
-   * them). A stale claimed/on_trip driver is also marked offline — a silent
-   * driver cannot serve a trip; releasing its claim is the janitor's job
-   * (phase D). Returns the swept driver ids.
+   * them). A stale claimed driver is also marked offline — a silent driver
+   * cannot be offered a trip, and offline stops the janitor's claim release from
+   * resurrecting it into an available set.
+   *
+   * An ON_TRIP driver is deliberately LEFT ALONE (never offlined, never dropped
+   * from the ZSET). It is mid-trip, not idle: a brief driver disconnect must not
+   * demote it, because APPLY_PING would then resurrect its reconnect ping to
+   * 'available' and re-add it to a cell set — a driver claimable for a SECOND
+   * trip while still on its first (a double-assignment). Its trip liveness is the
+   * matcher/janitor's concern, not the heartbeat sweep's. NOTE: a truly silent
+   * on-trip driver therefore lingers in the ZSET and is re-scanned each sweep
+   * (cheap — on-trip drivers are few); mid-trip abandonment recovery is a
+   * separate concern (a reconciler keyed on trip age is the upgrade path).
+   * Returns the swept driver ids.
    */
   async sweepStale(nowMs: number, staleMs: number = DEFAULT_STALE_MS): Promise<string[]> {
     const cutoff = nowMs - staleMs;
@@ -154,6 +165,7 @@ export class GeoIndex {
       // A ping may land between the ZSET scan and this read — recheck against
       // the hash (the authority) before declaring the driver dead.
       if (heartbeatMs !== null && heartbeatMs > cutoff) return;
+      if (status === 'on_trip') return; // mid-trip: never sweep (see method doc)
       if (status === 'available' && cell !== null) multi.srem(cellKey(cell), id);
       if (status !== null) multi.hset(driverKey(id), { status: 'offline' satisfies DriverStatus });
       multi.zrem(HEARTBEAT_ZSET, id);

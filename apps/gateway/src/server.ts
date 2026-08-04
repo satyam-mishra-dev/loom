@@ -16,6 +16,7 @@ import {
   driverChannel,
   offerReplyKey,
   type GeoPing,
+  type TripAssigned,
 } from '@loom/core';
 import { verifyToken } from './auth.js';
 import { createMetrics, renderMetrics, type GatewayMetrics } from './metrics.js';
@@ -356,6 +357,46 @@ export function buildGateway(opts: GatewayOptions): Gateway {
     }
   }
 
+  // Driver reconnect-while-on-trip: when a per-driver principal (re)connects,
+  // re-send any active trip it still owns so a driver that dropped mid-trip
+  // resumes its session. The on_trip Redis state is left untouched (sweepStale
+  // no longer demotes it), so the driver never re-enters an available set — no
+  // double-assignment — and its resumed pings are position-only. Best-effort: a
+  // lookup failure must never fail the connection. Fleet principals multiplex
+  // many drivers over one socket and track their own trips, so this per-principal
+  // lookup is skipped for them. The partial-unique index bounds the match to the
+  // one active trip a driver can have.
+  async function restoreActiveTrip(driverId: string, socket: WebSocket): Promise<void> {
+    if (pool === undefined) return;
+    try {
+      const res = await pool.query<{
+        trip_id: string;
+        rider_lat: number;
+        rider_lng: number;
+        dest_lat: number | null;
+        dest_lng: number | null;
+      }>(
+        `SELECT t.id AS trip_id, t.rider_lat, t.rider_lng, r.dest_lat, r.dest_lng
+         FROM trips t JOIN ride_requests r ON r.id = t.request_id
+         WHERE t.driver_id = $1 AND t.status IN ('matched', 'en_route', 'in_trip')
+         LIMIT 1`,
+        [driverId],
+      );
+      const row = res.rows[0];
+      if (row === undefined) return;
+      const assigned: TripAssigned = {
+        type: 'trip_assigned',
+        tripId: row.trip_id,
+        driverId,
+        pickup: { lat: row.rider_lat, lng: row.rider_lng },
+        dest: { lat: row.dest_lat ?? row.rider_lat, lng: row.dest_lng ?? row.rider_lng },
+      };
+      if (sendOn(socket, JSON.stringify(assigned))) metrics.sessionsResumedTotal++;
+    } catch (err) {
+      app.log.error({ err, driverId }, 'active-trip restore failed');
+    }
+  }
+
   // ---- socket registry + bounded outbound path ----
   const driverSockets = new Map<string, WebSocket>();
 
@@ -455,6 +496,10 @@ export function buildGateway(opts: GatewayOptions): Gateway {
 
     const boundIds = new Set<string>([principal]);
     bindDriver(principal, socket);
+
+    // Resume an active trip on (re)connect so a driver that dropped mid-trip
+    // picks up where it left off. Per-driver principals only (see the function).
+    if (!isFleet) void restoreActiveTrip(principal, socket);
 
     // Transport liveness: server pings every pingIntervalMs; no
     // pong within pongTimeoutMs ⇒ half-open TCP (NAT/mobile), terminate.

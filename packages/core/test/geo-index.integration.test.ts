@@ -164,6 +164,30 @@ describe('geo index (testcontainers redis)', () => {
     expect((await redis.smembers(cellKey(C0))).sort()).toEqual(['fresh', 'stale']);
   });
 
+  it('sweepStale never touches an on_trip driver; a reconnect ping keeps it on_trip, not available', async () => {
+    // A driver mid-trip: on_trip and out of every cell set (the matcher removed
+    // it at claim). Model a disconnect by letting its heartbeat go far stale.
+    await index.applyPings([{ driverId: 'busy', ...CENTER }], T0);
+    await redis.srem(cellKey(C0), 'busy');
+    await redis.hset(driverKey('busy'), { status: 'on_trip' });
+
+    // Well past the cutoff: the sweep must leave it — not offline, still tracked.
+    expect(await index.sweepStale(T0 + 60_000, 10_000)).toEqual([]);
+    expect(await redis.hget(driverKey('busy'), 'status')).toBe('on_trip');
+    expect(await redis.zscore(HEARTBEAT_ZSET, 'busy')).toBe(String(T0));
+
+    // Reconnect: pings resume as position/heartbeat updates only. The driver
+    // stays on_trip and never rejoins an available set — so it cannot be claimed
+    // for a second trip (no double-assignment).
+    const neighbor = ringCells(1)[0]!;
+    const to = centerOf(neighbor);
+    await index.applyPings([{ driverId: 'busy', ...to }], T0 + 61_000);
+    expect(await redis.hget(driverKey('busy'), 'status')).toBe('on_trip');
+    expect(await redis.hget(driverKey('busy'), 'heartbeatMs')).toBe(String(T0 + 61_000));
+    expect(await redis.smembers(cellKey(C0))).toEqual([]);
+    expect(await redis.smembers(cellKey(neighbor))).toEqual([]);
+  });
+
   it('findCandidates expands k only as needed, honors need/maxK, skips stale and claimed', async () => {
     const ring1 = ringCells(1).slice(0, 3);
     const ring2 = ringCells(2).slice(0, 5);

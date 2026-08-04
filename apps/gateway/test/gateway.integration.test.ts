@@ -394,6 +394,76 @@ describe('gateway (testcontainers redis, real sockets)', () => {
       expect(queued.sort()).toEqual(['r1', 'r1', 'r2']);
     });
 
+    it('driver reconnect while on trip: resumes the same trip, pings stay position-only, never double-assigned', async () => {
+      // A running gateway with an aggressive stale sweep — the exact interplay
+      // the reconnect must survive.
+      const { gw, port } = await startGateway({ pool, staleMs: 150, sweepIntervalMs: 40 });
+      const dest = { lat: 37.8, lng: -122.4 };
+      const cell = cellFor(CENTER.lat, CENTER.lng);
+
+      // Stage an active trip for d1, and d1 on_trip in Redis (out of every cell
+      // set, exactly as the matcher leaves an assigned driver).
+      await pool.query(
+        `INSERT INTO ride_requests (id, lat, lng, dest_lat, dest_lng, status) VALUES ('rr', $1, $2, $3, $4, 'matched')`,
+        [CENTER.lat, CENTER.lng, dest.lat, dest.lng],
+      );
+      await pool.query(
+        `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token, offer_id)
+         VALUES ('tt', 'rr', 'd1', $1, $2, 'en_route', 'tok', 'off')`,
+        [CENTER.lat, CENTER.lng],
+      );
+      await redis.hset(driverKey('d1'), { status: 'on_trip', cell });
+
+      // Connect: the gateway re-sends the active trip so the driver's app resumes.
+      const inbox1: Array<{ type: string; tripId?: string; driverId?: string }> = [];
+      const ws1 = await connect(port, signToken('d1', SECRET));
+      ws1.on('message', (d: Buffer) => inbox1.push(JSON.parse(String(d))));
+      await waitFor(() => inbox1.length === 1);
+      expect(inbox1[0]).toMatchObject({
+        type: 'trip_assigned',
+        tripId: 'tt',
+        driverId: 'd1',
+        dest,
+      });
+      expect(gw.metrics.sessionsResumedTotal).toBe(1);
+
+      // Pings resume as position updates; the driver STAYS on_trip and never
+      // re-enters an available set — even as the stale sweep runs underneath.
+      ping(ws1, 'd1', CENTER.lat + 0.001, CENTER.lng);
+      await waitFor(
+        async () => (await redis.hget(driverKey('d1'), 'lat')) === String(CENTER.lat + 0.001),
+      );
+      // Let the heartbeat go stale and the 40ms sweep run over it several times —
+      // a short disconnect must not demote an on-trip driver.
+      const hb = Number(await redis.hget(driverKey('d1'), 'heartbeatMs'));
+      await waitFor(() => Date.now() - hb > 250); // > staleMs (150) + a few sweep cycles
+      expect(await redis.hget(driverKey('d1'), 'status')).toBe('on_trip');
+      const movedCell = cellFor(CENTER.lat + 0.001, CENTER.lng);
+      expect(await redis.sismember(cellKey(movedCell), 'd1')).toBe(0);
+      expect(await redis.sismember(cellKey(cell), 'd1')).toBe(0);
+
+      // Drop and reconnect: the trip is not dropped, the assignment is re-sent,
+      // and the driver still owns the SAME trip — no double-assignment.
+      ws1.close();
+      await waitFor(() => gw.driverSockets.size === 0);
+      const inbox2: Array<{ type: string; tripId?: string }> = [];
+      const ws2 = await connect(port, signToken('d1', SECRET));
+      ws2.on('message', (d: Buffer) => inbox2.push(JSON.parse(String(d))));
+      await waitFor(() => inbox2.length === 1);
+      expect(inbox2[0]).toMatchObject({ type: 'trip_assigned', tripId: 'tt' });
+      expect(await redis.hget(driverKey('d1'), 'status')).toBe('on_trip');
+
+      // The trip row and the one-active-trip-per-driver invariant are intact.
+      expect((await pool.query(`SELECT status FROM trips WHERE id = 'tt'`)).rows[0]).toEqual({
+        status: 'en_route',
+      });
+      const active = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM trips
+         WHERE driver_id = 'd1' AND status IN ('matched', 'en_route', 'in_trip')`,
+      );
+      expect(active.rows[0]).toEqual({ n: 1 });
+    });
+
     it('malformed ride_requests are invalid, not intake errors', async () => {
       const { gw, port } = await startGateway({ pool });
       const ws = await connect(port, signToken('rider', SECRET));

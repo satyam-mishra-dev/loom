@@ -27,6 +27,8 @@ export interface GatewayMetrics {
   tripProgressTotal: number;
   /** Rider cancellations forwarded to the matcher's cancel queue. */
   rideCancelsTotal: number;
+  /** Reconnecting drivers whose active trip was re-sent so their session resumes. */
+  sessionsResumedTotal: number;
   replyErrorsTotal: number;
   batchSize: Hist;
   flushLatencyMs: Hist;
@@ -55,6 +57,7 @@ export function createMetrics(): GatewayMetrics {
     offerRepliesTotal: 0,
     tripProgressTotal: 0,
     rideCancelsTotal: 0,
+    sessionsResumedTotal: 0,
     replyErrorsTotal: 0,
     batchSize: new Hist(),
     flushLatencyMs: new Hist(),
@@ -84,6 +87,7 @@ export function renderMetrics(m: GatewayMetrics, limiter?: LimiterMetrics): stri
     ...renderCounter('offer_replies_total', m.offerRepliesTotal),
     ...renderCounter('trip_progress_total', m.tripProgressTotal),
     ...renderCounter('ride_cancels_total', m.rideCancelsTotal),
+    ...renderCounter('sessions_resumed_total', m.sessionsResumedTotal),
     ...renderCounter('reply_errors_total', m.replyErrorsTotal),
     ...renderSummary('ping_batch_size', m.batchSize),
     ...renderSummary('ping_flush_latency_ms', m.flushLatencyMs),
