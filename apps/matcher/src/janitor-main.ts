@@ -1,10 +1,10 @@
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
-import { createPool } from '@fleetline/db';
+import { createPool } from '@loom/db';
 import { Janitor } from './janitor.js';
 
 // Standalone janitor: the same sweep loop every matcher embeds, runnable
-// alone (`npm run janitor --workspace=@fleetline/matcher`) — proof that claim
+// alone (`npm run janitor --workspace=@loom/matcher`) — proof that claim
 // recovery needs no matcher alive, only the data.
 
 // Validate numeric env: setInterval(fn, NaN) from a bad JANITOR_SWEEP_MS would
@@ -19,7 +19,7 @@ function envInt(name: string, fallback: number): number {
 
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl =
-  process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
+  process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 const sweepIntervalMs = envInt('JANITOR_SWEEP_MS', 1_000);
 
 const log = pino({ name: 'janitor' });

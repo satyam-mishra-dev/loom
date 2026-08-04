@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import type { ServerMessage, SimMessage } from '@fleetline/core';
+import type { ServerMessage, SimMessage } from '@loom/core';
 
 export interface Sink {
   send(msg: SimMessage): void;

@@ -15,7 +15,7 @@ import {
   driverChannel,
   offerReplyKey,
   type GeoPing,
-} from '@fleetline/core';
+} from '@loom/core';
 import { verifyToken } from './auth.js';
 import { createMetrics, renderMetrics, type GatewayMetrics } from './metrics.js';
 
@@ -294,7 +294,7 @@ export function buildGateway(opts: GatewayOptions): Gateway {
   // The reply list buffers the race where the driver answers before the
   // matcher blocks; PEXPIRE GCs replies nobody ever collects (offer already
   // timed out). Trip progress rides the same LPUSH/BLMOVE pattern as request
-  // intake. See @fleetline/core messages.ts for the full transport rationale.
+  // intake. See @loom/core messages.ts for the full transport rationale.
   async function forwardOfferReply(offerId: string, accept: boolean): Promise<void> {
     try {
       await redis

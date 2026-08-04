@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
-import { ClaimStore, REQUESTS_QUEUE, driverKey } from '@fleetline/core';
+import { ClaimStore, REQUESTS_QUEUE, driverKey } from '@loom/core';
 import { createJanitorMetrics, type JanitorMetrics } from './metrics.js';
 import { TripStore } from './trip-store.js';
 
@@ -25,7 +25,7 @@ export interface JanitorOptions {
  * because the claim's expiry lives in DATA: the value's expiresAt, indexed in
  * the claims:by-expiry ZSET written by the same Lua that created the claim.
  * Any surviving process — this loop inside every matcher, or a standalone
- * `npm run janitor --workspace=@fleetline/matcher` — can sweep it:
+ * `npm run janitor --workspace=@loom/matcher` — can sweep it:
  *
  *   ZRANGEBYSCORE the due claims → for each, ONE Lua script re-reads the
  *   claim (it may have been confirmed/released since the scan) and, only if

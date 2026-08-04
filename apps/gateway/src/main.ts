@@ -1,5 +1,5 @@
 import { Redis } from 'ioredis';
-import { createPool } from '@fleetline/db';
+import { createPool } from '@loom/db';
 import { buildGateway } from './server.js';
 
 // Validate numeric env up front: a raw Number(env) that yields NaN would
@@ -15,10 +15,10 @@ function envInt(name: string, fallback: number): number {
 const port = envInt('PORT', 8080);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl =
-  process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
+  process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 // Default keeps `docker compose up` + local demo one-command; set
 // GATEWAY_SECRET for anything reachable beyond localhost.
-const secret = process.env['GATEWAY_SECRET'] ?? 'fleetline-dev-secret';
+const secret = process.env['GATEWAY_SECRET'] ?? 'loom-dev-secret';
 
 const redis = new Redis(redisUrl);
 const pool = createPool(databaseUrl);

@@ -24,7 +24,7 @@ export function Hud({
     <Card className="pointer-events-auto w-[248px] p-4">
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
-          <span className="font-hud text-[18px] font-700 tracking-wide text-fg">FLEETLINE</span>
+          <span className="font-hud text-[18px] font-700 tracking-wide text-fg">LOOM</span>
           <span className="font-hud text-[11px] uppercase tracking-widest text-muted">control room</span>
         </div>
         <Didactic topic="hud" />

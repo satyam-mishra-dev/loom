@@ -17,7 +17,7 @@ import {
   rankCandidates,
   type OfferMessage,
   type TripAssigned,
-} from '@fleetline/core';
+} from '@loom/core';
 import { createMetrics, type MatcherMetrics } from './metrics.js';
 import { TripStore } from './trip-store.js';
 

@@ -1,5 +1,5 @@
 {
-  "name": "@fleetline/simulator",
+  "name": "@loom/simulator",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fleetline/core": "*",
+    "@loom/core": "*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

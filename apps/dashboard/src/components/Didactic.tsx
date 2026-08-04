@@ -13,7 +13,7 @@ import { Popover } from './ui/popover.js';
  * answer in miniature before the demo ships.
  */
 
-// Optional GitHub base (e.g. https://github.com/you/fleetline/blob/main). When
+// Optional GitHub base (e.g. https://github.com/you/loom/blob/main). When
 // unset, the on-disk path is shown as a copyable monospace reference instead.
 const REPO_URL = (import.meta.env['VITE_REPO_URL'] as string | undefined) ?? '';
 

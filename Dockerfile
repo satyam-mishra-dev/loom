@@ -22,7 +22,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 USER node
 EXPOSE 8080 8090 4600
-CMD ["npm", "run", "start", "--workspace=@fleetline/gateway"]
+CMD ["npm", "run", "start", "--workspace=@loom/gateway"]
 
 # ---- dashboard build: Vite bundles React + deck.gl into static assets.
 # VITE_READMODEL_URL is baked at build time (the browser hits the host port). ----
@@ -32,7 +32,7 @@ ARG VITE_READMODEL_URL=http://localhost:4600
 ENV VITE_READMODEL_URL=$VITE_READMODEL_URL
 # Demo-grade token baked into the bundle so the dashboard can reach the read
 # model's now-gated /events + /spawn. Must match the read model's READ_MODEL_TOKEN.
-ARG VITE_READMODEL_TOKEN=fleetline-demo-token
+ARG VITE_READMODEL_TOKEN=loom-demo-token
 ENV VITE_READMODEL_TOKEN=$VITE_READMODEL_TOKEN
 # Optional: base GitHub URL for the didactic {} deep-links (ARCHITECTURE.md +
 # tests) and the commit SHA for the authenticity footer. Empty ⇒ the panels show
@@ -41,7 +41,7 @@ ARG VITE_REPO_URL=
 ENV VITE_REPO_URL=$VITE_REPO_URL
 ARG VITE_COMMIT_SHA=
 ENV VITE_COMMIT_SHA=$VITE_COMMIT_SHA
-RUN npm run build --workspace=@fleetline/dashboard
+RUN npm run build --workspace=@loom/dashboard
 
 # ---- dashboard: serve the static bundle with a zero-dep node server ----
 FROM node:20-alpine AS dashboard

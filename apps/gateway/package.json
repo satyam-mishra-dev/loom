@@ -1,5 +1,5 @@
 {
-  "name": "@fleetline/gateway",
+  "name": "@loom/gateway",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,8 @@
     "test:integration": "vitest run gateway.integration"
   },
   "dependencies": {
-    "@fleetline/core": "*",
-    "@fleetline/db": "*",
+    "@loom/core": "*",
+    "@loom/db": "*",
     "fastify": "^5.0.0",
     "ioredis": "^5.4.0",
     "pg": "^8.12.0",

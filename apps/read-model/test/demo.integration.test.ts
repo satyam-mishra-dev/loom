@@ -3,8 +3,8 @@ import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redi
 import { Redis } from 'ioredis';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, runMigrations } from '@fleetline/db';
-import { Janitor } from '@fleetline/matcher';
+import { createPool, runMigrations } from '@loom/db';
+import { Janitor } from '@loom/matcher';
 import {
   cleanupCrash,
   crashSnapshot,

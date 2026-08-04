@@ -21,8 +21,8 @@ import {
   driverKey,
   offerReplyKey,
   type GeoPing,
-} from '@fleetline/core';
-import { MatcherCore, TripStore } from '@fleetline/matcher';
+} from '@loom/core';
+import { MatcherCore, TripStore } from '@loom/matcher';
 
 /**
  * The demo mechanisms behind the dashboard's signature controls — Proof Mode

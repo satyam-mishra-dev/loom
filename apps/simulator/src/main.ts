@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { parseArgs } from 'node:util';
-import type { ServerMessage } from '@fleetline/core';
+import type { ServerMessage } from '@loom/core';
 import { Simulation } from './sim.js';
 import { createSink } from './sinks.js';
 import { DEFAULT_CITY } from './world.js';

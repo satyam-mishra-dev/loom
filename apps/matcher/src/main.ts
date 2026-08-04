@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
-import { createPool } from '@fleetline/db';
+import { createPool } from '@loom/db';
 import { Janitor } from './janitor.js';
 import { MatcherCore } from './matcher.js';
 import { renderMetrics } from './metrics.js';
@@ -18,7 +18,7 @@ const port = envInt('PORT', 8090);
 const consumers = envInt('MATCHER_CONSUMERS', 4);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl =
-  process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
+  process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 
 const log = pino({ name: 'matcher' });
 const redis = new Redis(redisUrl);

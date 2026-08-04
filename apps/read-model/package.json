@@ -1,5 +1,5 @@
 {
-  "name": "@fleetline/read-model",
+  "name": "@loom/read-model",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,9 +12,9 @@
     "test:integration": "vitest run read-model.integration"
   },
   "dependencies": {
-    "@fleetline/core": "*",
-    "@fleetline/db": "*",
-    "@fleetline/matcher": "*",
+    "@loom/core": "*",
+    "@loom/db": "*",
+    "@loom/matcher": "*",
     "fastify": "^5.0.0",
     "h3-js": "^4.1.0",
     "ioredis": "^5.4.0",

@@ -90,7 +90,7 @@ no-build static page. This is the deliberate contrast with the sibling project
 (Tally), whose dashboard is intentionally build-free — a single HTML file, no
 toolchain — because Tally's read side is tables and numbers that vanilla DOM
 renders fine, and the point there was to prove the *engine*, not to ship a
-frontend. Fleetline's artifact *is* a live map: 5,000 moving dots, trip arcs, and
+frontend. Loom's artifact *is* a live map: 5,000 moving dots, trip arcs, and
 an H3 surge heatmap need WebGL, and deck.gl's `H3HexagonLayer` maps my surge cells
 to coloured, extruded hexagons directly. That earns a build step. It stays
 self-contained — Vite bundles everything, no CDN at runtime (the deployment CSP

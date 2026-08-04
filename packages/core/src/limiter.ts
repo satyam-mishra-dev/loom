@@ -19,7 +19,7 @@ import { GCRA_EPOCH_SEC, GcraLimiter, gcraDecide, type GcraConfig, type RateResu
  *
  * FAIL-CLOSED (opt in via `failClosed`) is right only when the limit IS the
  * product — billing quotas, hard security throttles — where admitting
- * un-metered traffic is worse than rejecting it. Fleetline's request intake is
+ * un-metered traffic is worse than rejecting it. Loom's request intake is
  * capacity protection, so it ships fail-open.
  */
 

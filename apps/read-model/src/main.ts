@@ -1,5 +1,5 @@
 import { Redis } from 'ioredis';
-import { createPool } from '@fleetline/db';
+import { createPool } from '@loom/db';
 import { buildReadModel } from './server.js';
 
 // Validate numeric env: a raw Number(env) that parses to NaN would feed
@@ -24,7 +24,7 @@ function envFinite(name: string, fallback: number): number {
 const port = envInt('PORT', 4600);
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl =
-  process.env['DATABASE_URL'] ?? 'postgres://fleetline:fleetline@127.0.0.1:5434/fleetline';
+  process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 const matcherMetricsUrl = process.env['MATCHER_METRICS_URL'] ?? 'http://127.0.0.1:8090/metrics';
 
 const redis = new Redis(redisUrl);

@@ -6,8 +6,8 @@ import { cellToLatLng } from 'h3-js';
 import { Redis } from 'ioredis';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { GeoIndex, SurgeStore, cellFor, type GeoPing } from '@fleetline/core';
-import { createPool, runMigrations } from '@fleetline/db';
+import { GeoIndex, SurgeStore, cellFor, type GeoPing } from '@loom/core';
+import { createPool, runMigrations } from '@loom/db';
 import { buildReadModel, type Snapshot } from '../src/server.js';
 
 // Real read model against testcontainers Redis + Postgres: the whole snapshot

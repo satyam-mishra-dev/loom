@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button, Card } from './ui/base.js';
 
-const SEEN_KEY = 'fleetline.seen-intro.v1';
+const SEEN_KEY = 'loom.seen-intro.v1';
 
 /**
  * First-visit card (§3.4): what this is / what to press / link to the code,
@@ -42,7 +42,7 @@ export function FirstVisitOverlay(): ReactElement | null {
         >
           <X size={18} />
         </button>
-        <div className="font-hud text-[20px] font-700 uppercase tracking-wide text-fg">Fleetline</div>
+        <div className="font-hud text-[20px] font-700 uppercase tracking-wide text-fg">Loom</div>
         <ul className="mt-4 flex flex-col gap-3 font-body text-[13.5px] leading-relaxed text-fg/85">
           {/* TODO(voice): line 1 — what this is. */}
           <li>

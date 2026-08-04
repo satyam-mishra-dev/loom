@@ -1,4 +1,4 @@
-import { Hist, renderCounter, renderSummary } from '@fleetline/core';
+import { Hist, renderCounter, renderSummary } from '@loom/core';
 
 export interface MatcherMetrics {
   /** Requests that ended matched / unmatched (terminal outcomes). */

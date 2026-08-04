@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import { Redis } from 'ioredis';
-import { GeoIndex, HEARTBEAT_ZSET, cellFor } from '@fleetline/core';
-import { createPool, runMigrations } from '@fleetline/db';
-import { Janitor, MatcherCore } from '@fleetline/matcher';
+import { GeoIndex, HEARTBEAT_ZSET, cellFor } from '@loom/core';
+import { createPool, runMigrations } from '@loom/db';
+import { Janitor, MatcherCore } from '@loom/matcher';
 import { buildGateway } from '../apps/gateway/src/server.js';
 import { signToken } from '../apps/gateway/src/auth.js';
 import { createRng } from '../apps/simulator/src/rng.js';
@@ -269,7 +269,7 @@ function printTable(out: BenchOutput): void {
     p95ms: l.p95Ms,
     p99ms: l.p99Ms,
   }));
-  process.stdout.write('\n=== Fleetline bench — request→match latency (real stack, seeded) ===\n');
+  process.stdout.write('\n=== Loom bench — request→match latency (real stack, seeded) ===\n');
   console.table(rows);
   process.stdout.write(
     `geo candidate search: p50 ${out.geo.candidateSearchP50Ms}ms  p99 ${out.geo.candidateSearchP99Ms}ms (${out.geo.samples} searches)\n`,

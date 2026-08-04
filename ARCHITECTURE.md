@@ -170,7 +170,7 @@ connection; I would be paying for a bidirectional channel I have no upstream
 traffic for, and re-implementing the reconnect logic SSE hands me for free. The
 one place the browser *does* talk back — the "spawn requests" control — is an
 ordinary `POST /spawn`, which is the honest shape for a command. WebSockets are
-where Fleetline's *drivers* live (bidirectional pings, offers, replies,
+where Loom's *drivers* live (bidirectional pings, offers, replies,
 heartbeats); the dashboard's needs are the opposite, so the transport is too. The
 snapshot is bounded — driver dots are capped and the true fleet size reported
 separately — so a 5,000-driver fleet never blows the frame.

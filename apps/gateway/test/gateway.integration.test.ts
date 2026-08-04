@@ -18,8 +18,8 @@ import {
   driverChannel,
   driverKey,
   offerReplyKey,
-} from '@fleetline/core';
-import { createPool, runMigrations } from '@fleetline/db';
+} from '@loom/core';
+import { createPool, runMigrations } from '@loom/db';
 import { signToken } from '../src/auth.js';
 import { buildGateway, type Gateway, type GatewayOptions } from '../src/server.js';
 

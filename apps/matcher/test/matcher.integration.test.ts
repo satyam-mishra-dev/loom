@@ -11,8 +11,8 @@ import {
   cellFor,
   driverKey,
   offerReplyKey,
-} from '@fleetline/core';
-import { createPool, runMigrations } from '@fleetline/db';
+} from '@loom/core';
+import { createPool, runMigrations } from '@loom/db';
 import { MatcherCore } from '../src/matcher.js';
 
 // The matcher as a service: real consumer loops over real Redis lists, real

@@ -9,7 +9,7 @@ import {
   cellFor,
   driverKey,
   type CellSurge,
-} from '@fleetline/core';
+} from '@loom/core';
 import { runCrashDemo, runProof, tripHistory, type Deps } from './demo.js';
 
 /**

@@ -6,9 +6,9 @@ import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redi
 import { Redis } from 'ioredis';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CLAIMS_BY_EXPIRY } from '@fleetline/core';
-import { createPool, runMigrations } from '@fleetline/db';
-import { Janitor, MatcherCore } from '@fleetline/matcher';
+import { CLAIMS_BY_EXPIRY } from '@loom/core';
+import { createPool, runMigrations } from '@loom/db';
+import { Janitor, MatcherCore } from '@loom/matcher';
 // Gateway and simulator are apps, not packages — reach into their sources the
 // way their own tests do.
 import { buildGateway, type Gateway } from '../apps/gateway/src/server.js';

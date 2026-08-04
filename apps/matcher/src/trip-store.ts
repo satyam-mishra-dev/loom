@@ -5,7 +5,7 @@ import {
   transition,
   type TripEvent,
   type TripState,
-} from '@fleetline/core';
+} from '@loom/core';
 
 /**
  * Persistence for the trip machine. Every method is ONE Postgres transaction

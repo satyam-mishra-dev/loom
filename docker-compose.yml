@@ -1,21 +1,22 @@
-# The whole Fleetline stack, one command: `docker compose up -d --wait`.
+# The whole Loom stack, one command: `docker compose up -d --wait`.
 # Host ports: Postgres 5434, Redis 6381, dashboard 4620, SSE/read-model 4600,
 # gateway 4640, matcher 4650 (all clear of the usual 5432/6379/3000/4000 and
 # Tally's 48xx). Dependency order and healthchecks let --wait block until the
 # stack is actually serving.
+name: loom
 services:
   postgres:
     image: postgres:16-alpine
     ports:
       - '5434:5432'
     environment:
-      POSTGRES_USER: fleetline
-      POSTGRES_PASSWORD: fleetline
-      POSTGRES_DB: fleetline
+      POSTGRES_USER: loom
+      POSTGRES_PASSWORD: loom
+      POSTGRES_DB: loom
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U fleetline -d fleetline']
+      test: ['CMD-SHELL', 'pg_isready -U loom -d loom']
       interval: 5s
       timeout: 3s
       retries: 10
@@ -40,9 +41,9 @@ services:
     build:
       context: .
       target: app
-    command: npm run migrate --workspace=@fleetline/db
+    command: npm run migrate --workspace=@loom/db
     environment:
-      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
+      DATABASE_URL: postgres://loom:loom@postgres:5432/loom
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,12 +53,12 @@ services:
     build:
       context: .
       target: app
-    command: npm run start --workspace=@fleetline/gateway
+    command: npm run start --workspace=@loom/gateway
     environment:
       PORT: '8080'
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
-      GATEWAY_SECRET: ${GATEWAY_SECRET:-fleetline-dev-secret}
+      DATABASE_URL: postgres://loom:loom@postgres:5432/loom
+      GATEWAY_SECRET: ${GATEWAY_SECRET:-loom-dev-secret}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-200}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-400}
     ports:
@@ -81,11 +82,11 @@ services:
     build:
       context: .
       target: app
-    command: npm run start --workspace=@fleetline/matcher
+    command: npm run start --workspace=@loom/matcher
     environment:
       PORT: '8090'
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
+      DATABASE_URL: postgres://loom:loom@postgres:5432/loom
       MATCHER_CONSUMERS: ${MATCHER_CONSUMERS:-8}
     ports:
       - '4650:8090'
@@ -107,17 +108,17 @@ services:
     build:
       context: .
       target: app
-    command: npm run start --workspace=@fleetline/read-model
+    command: npm run start --workspace=@loom/read-model
     environment:
       PORT: '4600'
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgres://fleetline:fleetline@postgres:5432/fleetline
+      DATABASE_URL: postgres://loom:loom@postgres:5432/loom
       MATCHER_METRICS_URL: http://matcher:8090/metrics
       CENTER_LAT: '37.7749'
       CENTER_LNG: '-122.4194'
       # Demo-grade token gating /spawn + /events; the dashboard build bakes the
       # same value (VITE_READMODEL_TOKEN) so the map streams end to end.
-      READ_MODEL_TOKEN: ${READMODEL_TOKEN:-fleetline-demo-token}
+      READ_MODEL_TOKEN: ${READMODEL_TOKEN:-loom-demo-token}
     ports:
       - '4600:4600'
     depends_on:
@@ -143,8 +144,8 @@ services:
       context: .
       target: app
     command: >
-      npm run start --workspace=@fleetline/simulator --
-      --sink ws --gateway ws://gateway:8080/ws --auth-secret ${GATEWAY_SECRET:-fleetline-dev-secret}
+      npm run start --workspace=@loom/simulator --
+      --sink ws --gateway ws://gateway:8080/ws --auth-secret ${GATEWAY_SECRET:-loom-dev-secret}
       --drivers ${SIM_DRIVERS:-2000} --rps ${SIM_RPS:-20} --hotspots ${SIM_HOTSPOTS:-3}
       --seed 42 --speedup 1 --accept-prob 0.85
     depends_on:
@@ -158,7 +159,7 @@ services:
       target: dashboard
       args:
         VITE_READMODEL_URL: ${VITE_READMODEL_URL:-http://localhost:4600}
-        VITE_READMODEL_TOKEN: ${READMODEL_TOKEN:-fleetline-demo-token}
+        VITE_READMODEL_TOKEN: ${READMODEL_TOKEN:-loom-demo-token}
         # Optional: enables the didactic {} panels' GitHub deep-links + SHA footer.
         VITE_REPO_URL: ${VITE_REPO_URL:-}
         VITE_COMMIT_SHA: ${VITE_COMMIT_SHA:-}

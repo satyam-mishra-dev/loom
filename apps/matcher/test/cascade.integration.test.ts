@@ -16,8 +16,8 @@ import {
   offerReplyKey,
   type OfferMessage,
   type TripAssigned,
-} from '@fleetline/core';
-import { createPool, runMigrations } from '@fleetline/db';
+} from '@loom/core';
+import { createPool, runMigrations } from '@loom/db';
 import { Janitor } from '../src/janitor.js';
 import { MatcherCore } from '../src/matcher.js';
 import { TripStore } from '../src/trip-store.js';

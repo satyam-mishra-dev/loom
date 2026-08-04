@@ -27,7 +27,7 @@ per-request Postgres time faster than it adds capacity.
   consecutive full sweeps. **p50 is the stable metric**; p95/p99 swing run to
   run on this box and are reported but not leaned on.
 - **Co-resident-load caveat (important).** These runs share a laptop with 2–3
-  other Docker compose stacks (Tally, a live Fleetline stack) *plus* the bench's
+  other Docker compose stacks (Tally, a live Loom stack) *plus* the bench's
   own testcontainers Postgres+Redis. Absolute latencies carry real co-resident
   noise — treat them as a magnitude, and trust the *relative* before/after
   (measured back-to-back on the same loaded box) far more than any single

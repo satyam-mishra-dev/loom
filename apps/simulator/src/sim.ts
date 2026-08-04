@@ -1,4 +1,4 @@
-import type { SimMessage } from '@fleetline/core';
+import type { SimMessage } from '@loom/core';
 import {
   assignTrip,
   createAgents,

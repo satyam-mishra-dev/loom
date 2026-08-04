@@ -1,9 +1,10 @@
-# Fleetline
+# Loom
 
-Fleetline matches ride requests to a simulated fleet of up to 5,000 live drivers
-in milliseconds — with a proven guarantee that no driver is ever double-assigned,
-offer timeouts that survive process crashes, and per-cell surge pricing. The city
-is simulated; the engineering is not.
+**Matches 5,000 drivers in milliseconds. Never double-books one.**
+
+Real-time geo-dispatch over an H3 hexagonal index — atomic driver claims,
+crash-safe offer timeouts, and per-cell surge, proven under 200-way concurrency.
+The city is simulated; the engineering is not.
 
 It is a TypeScript monorepo: a driver/traffic **simulator**, a WebSocket
 **gateway** that ingests position pings and ride requests, a Redis **geo index**
@@ -150,15 +151,15 @@ hot reload:
 ```bash
 npm install
 docker compose up -d postgres redis
-DATABASE_URL=postgres://fleetline:fleetline@127.0.0.1:5434/fleetline \
-  npm run migrate --workspace=@fleetline/db
+DATABASE_URL=postgres://loom:loom@127.0.0.1:5434/loom \
+  npm run migrate --workspace=@loom/db
 
-npm run start --workspace=@fleetline/gateway      # :8080
-npm run start --workspace=@fleetline/matcher      # :8090 (embeds the janitor)
-npm run start --workspace=@fleetline/read-model   # :4600 (SSE)
-npm run dev   --workspace=@fleetline/dashboard    # :4620 (Vite)
-npm run start --workspace=@fleetline/simulator -- \
-  --sink ws --gateway ws://127.0.0.1:8080/ws --auth-secret fleetline-dev-secret \
+npm run start --workspace=@loom/gateway      # :8080
+npm run start --workspace=@loom/matcher      # :8090 (embeds the janitor)
+npm run start --workspace=@loom/read-model   # :4600 (SSE)
+npm run dev   --workspace=@loom/dashboard    # :4620 (Vite)
+npm run start --workspace=@loom/simulator -- \
+  --sink ws --gateway ws://127.0.0.1:8080/ws --auth-secret loom-dev-secret \
   --drivers 2000 --rps 20 --hotspots 3
 ```
 

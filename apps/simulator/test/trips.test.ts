@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DriverPing, TripProgress } from '@fleetline/core';
+import type { DriverPing, TripProgress } from '@loom/core';
 import { Simulation } from '../src/sim.js';
 import { toLatLng } from '../src/world.js';
 

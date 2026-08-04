@@ -1,4 +1,4 @@
-import { Hist, renderCounter, renderSummary, type LimiterMetrics } from '@fleetline/core';
+import { Hist, renderCounter, renderSummary, type LimiterMetrics } from '@loom/core';
 
 export interface GatewayMetrics {
   wsConnectionsTotal: number;
