@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SURGE_MAX, SURGE_MIN, surgeMultiplier } from '../src/index.js';
+import { BASE_FARE, SURGE_MAX, SURGE_MIN, quoteFare, surgeMultiplier } from '../src/index.js';
 
 describe('surgeMultiplier', () => {
   it('no demand → no surge (an idle cell never surges), whatever the supply', () => {
@@ -27,5 +27,25 @@ describe('surgeMultiplier', () => {
     expect(surgeMultiplier(100, 5)).toBe(SURGE_MAX); // 20x → 3.0
     expect(surgeMultiplier(30, 10)).toBe(SURGE_MAX); // 3.0x exactly
     expect(surgeMultiplier(31, 10)).toBe(SURGE_MAX); // 3.1x → clamped
+  });
+});
+
+describe('quoteFare', () => {
+  it('surge of 1.0 leaves the base fare untouched', () => {
+    expect(quoteFare(0, 1)).toBe(BASE_FARE);
+    // A 2 km trip at no surge: base + per-km, deterministic to the cent.
+    expect(quoteFare(2000, 1)).toBe(5.5);
+  });
+
+  it('a higher surge multiplier lifts the price proportionally', () => {
+    const base = quoteFare(2000, 1);
+    expect(quoteFare(2000, 2)).toBeGreaterThan(base);
+    expect(quoteFare(2000, 2)).toBe(11); // 5.5 × 2
+    expect(quoteFare(2000, 1.5)).toBeCloseTo(8.25, 9);
+  });
+
+  it('is deterministic and rounded to cents', () => {
+    expect(quoteFare(1234, 1.7)).toBe(quoteFare(1234, 1.7));
+    expect(Number.isInteger(quoteFare(1234, 1.7) * 100)).toBe(true);
   });
 });

@@ -8,12 +8,15 @@ import {
   ClaimStore,
   GeoIndex,
   REQUESTS_QUEUE,
+  SURGE_HASH,
   TRIP_EVENTS_QUEUE,
   cellFor,
   cellKey,
   claimKey,
   driverKey,
+  haversineMeters,
   offerReplyKey,
+  quoteFare,
   type OfferMessage,
   type TripAssigned,
 } from '@loom/core';
@@ -208,6 +211,27 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
     expect(core.metrics.offerAcceptsTotal).toBe(1);
     expect(core.metrics.tripsCompletedTotal).toBe(1);
     expect(core.metrics.pgUniqueViolationsTotal).toBe(0);
+  });
+
+  it('prices the offer from the pickup cell surge: no surge → base fare, surge → higher', async () => {
+    const tripMeters = haversineMeters(CENTER.lat, CENTER.lng, DEST.lat, DEST.lng);
+
+    // No surge published for the cell → the offer shows the base fare.
+    await seedDrivers(1);
+    await insertRequest('r1');
+    expect(await newCore().matchRequest('r1')).toBe('matched');
+    expect(fleet.offers[0]).toMatchObject({ surge: 1, price: quoteFare(tripMeters, 1) });
+
+    // Same ride, cell now surging 2× → same trip, strictly higher displayed fare.
+    await redis.flushall();
+    await pool.query('TRUNCATE trip_events, ride_requests, trips CASCADE');
+    fleet.offers.length = 0;
+    await redis.hset(SURGE_HASH, C0, '2.000');
+    await seedDrivers(1);
+    await insertRequest('r2');
+    expect(await newCore().matchRequest('r2')).toBe('matched');
+    expect(fleet.offers[0]).toMatchObject({ surge: 2, price: quoteFare(tripMeters, 2) });
+    expect(fleet.offers[0]!.price).toBeGreaterThan(quoteFare(tripMeters, 1));
   });
 
   it('decline → the NEXT candidate gets the offer; the decliner is released', async () => {

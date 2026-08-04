@@ -10,10 +10,14 @@ import {
   GeoIndex,
   REQUESTS_PROCESSING,
   REQUESTS_QUEUE,
+  SurgeStore,
   TRIP_EVENTS_PROCESSING,
   TRIP_EVENTS_QUEUE,
+  cellFor,
   driverChannel,
+  haversineMeters,
   offerReplyKey,
+  quoteFare,
   rankCandidates,
   type OfferMessage,
   type TripAssigned,
@@ -69,6 +73,7 @@ export class MatcherCore {
   readonly geoIndex: GeoIndex;
   readonly claims: ClaimStore;
   readonly trips: TripStore;
+  readonly surge: SurgeStore;
 
   private readonly redis: Redis;
   private readonly pool: pg.Pool;
@@ -104,6 +109,7 @@ export class MatcherCore {
     this.geoIndex = new GeoIndex(this.redis);
     this.claims = new ClaimStore(this.redis);
     this.trips = new TripStore(this.pool);
+    this.surge = new SurgeStore(this.redis);
   }
 
   /**
@@ -143,6 +149,14 @@ export class MatcherCore {
     const rider = { lat: row.lat, lng: row.lng };
     const dest = { lat: row.dest_lat ?? row.lat, lng: row.dest_lng ?? row.lng };
     const tripId = row.existing_trip_id ?? randomUUID();
+
+    // Price the ride once, up front, from the pickup cell's current surge — the
+    // same multiplier for every candidate in this cascade (surge is a property
+    // of the ride's AREA, not the driver, so it sets the displayed fare but
+    // never reorders candidates; proximity/ETA does that). Read here so the
+    // whole cascade quotes one consistent price.
+    const surge = await this.surge.multiplierFor(cellFor(rider.lat, rider.lng));
+    const price = quoteFare(haversineMeters(rider.lat, rider.lng, dest.lat, dest.lng), surge);
 
     const { candidates } = await this.geoIndex.findCandidates(rider.lat, rider.lng, {
       need: this.need,
@@ -203,6 +217,8 @@ export class MatcherCore {
           tripId,
           driverId,
           pickup: rider,
+          price,
+          surge,
           expiresAt: this.now() + this.offerTtlMs,
         };
         await this.redis.publish(driverChannel(driverId), JSON.stringify(offer));

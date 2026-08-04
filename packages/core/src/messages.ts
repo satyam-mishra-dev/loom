@@ -47,6 +47,10 @@ export interface OfferMessage {
   tripId: string;
   driverId: string;
   pickup: { lat: number; lng: number };
+  /** Displayed fare for the trip, surge already applied (see quoteFare). */
+  price: number;
+  /** The area's current surge multiplier that produced `price` (1.0 = no surge). */
+  surge: number;
   /** Epoch ms; replies after this are ignored (the reply list just expires). */
   expiresAt: number;
 }

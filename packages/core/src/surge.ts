@@ -44,6 +44,21 @@ export function surgeMultiplier(demand: number, supply: number): number {
   return Math.min(SURGE_MAX, Math.max(SURGE_MIN, demand / supply));
 }
 
+/** Flat base fare + per-km rate, in the same abstract currency as the offer price. */
+export const BASE_FARE = 2.5;
+export const PER_KM_FARE = 1.5;
+
+/**
+ * The fare shown in a driver offer: (base + per-km × trip km) × surge, rounded
+ * to cents. Pure and deterministic. surge = 1 leaves the base fare untouched;
+ * a higher surge multiplier lifts the price proportionally. NOTE: naive
+ * flat-rate model — real pricing folds in time, wait, tolls, and vehicle tier.
+ */
+export function quoteFare(tripMeters: number, surge: number): number {
+  const base = BASE_FARE + PER_KM_FARE * (tripMeters / 1000);
+  return Math.round(base * surge * 100) / 100;
+}
+
 export interface CellSurge {
   cell: string;
   demand: number;
@@ -126,5 +141,16 @@ export class SurgeStore {
     const out: Record<string, number> = {};
     for (const [cell, mult] of Object.entries(hash)) out[cell] = Number(mult);
     return out;
+  }
+
+  /**
+   * The current multiplier for a single cell, from the published hash. Defaults
+   * to SURGE_MIN (no surge) for a cell that isn't surging or reads back garbage
+   * — the matcher prices every offer, so this must never throw or return NaN.
+   */
+  async multiplierFor(cell: string): Promise<number> {
+    const raw = await this.redis.hget(SURGE_HASH, cell);
+    const m = raw === null ? SURGE_MIN : Number(raw);
+    return Number.isFinite(m) && m >= SURGE_MIN ? m : SURGE_MIN;
   }
 }
