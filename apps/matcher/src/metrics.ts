@@ -67,6 +67,8 @@ export interface JanitorMetrics {
   reconcileSweepsTotal: number;
   /** Drivers stuck 'on_trip' (trip_done committed, freeDriver never ran) that the reconciler freed. */
   stuckDriversFreedTotal: number;
+  /** Trips abandoned mid-ride (driver went silent) whose driver was retired to offline. */
+  tripsAbandonedTotal: number;
   sweepErrorsTotal: number;
 }
 
@@ -78,6 +80,7 @@ export function createJanitorMetrics(): JanitorMetrics {
     janitorGoneTotal: 0,
     reconcileSweepsTotal: 0,
     stuckDriversFreedTotal: 0,
+    tripsAbandonedTotal: 0,
     sweepErrorsTotal: 0,
   };
 }
@@ -110,6 +113,7 @@ export function renderMetrics(m: MatcherMetrics, j?: JanitorMetrics): string {
       ...renderCounter('janitor_gone_total', j.janitorGoneTotal),
       ...renderCounter('janitor_reconcile_sweeps_total', j.reconcileSweepsTotal),
       ...renderCounter('janitor_stuck_drivers_freed_total', j.stuckDriversFreedTotal),
+      ...renderCounter('janitor_trips_abandoned_total', j.tripsAbandonedTotal),
       ...renderCounter('janitor_sweep_errors_total', j.sweepErrorsTotal),
     );
   }

@@ -34,10 +34,14 @@ const EVENTS: TripEvent[] = [
   { type: 'TRIP_DONE' },
   { type: 'UNMATCHED' },
   { type: 'RIDER_CANCELLED' },
+  { type: 'TRIP_ABANDONED' },
 ];
 
 // Rider cancellation is legal from every non-terminal state → cancelled.
 const RIDER_CANCEL: TripState = { status: 'cancelled', reason: 'rider_cancelled' };
+
+// Abandonment is legal only from the driver-committed driving states → cancelled.
+const ABANDONED: TripState = { status: 'cancelled', reason: 'abandoned' };
 
 // status → event type → expected next state. Everything absent is illegal.
 const LEGAL: Record<string, Partial<Record<TripEvent['type'], TripState>>> = {
@@ -56,12 +60,18 @@ const LEGAL: Record<string, Partial<Record<TripEvent['type'], TripState>>> = {
   matched: {
     DRIVER_EN_ROUTE: { status: 'en_route', driverId: 'd1' },
     RIDER_CANCELLED: RIDER_CANCEL,
+    TRIP_ABANDONED: ABANDONED,
   },
   en_route: {
     ARRIVED_PICKUP: { status: 'in_trip', driverId: 'd1' },
     RIDER_CANCELLED: RIDER_CANCEL,
+    TRIP_ABANDONED: ABANDONED,
   },
-  in_trip: { TRIP_DONE: { status: 'completed', driverId: 'd1' }, RIDER_CANCELLED: RIDER_CANCEL },
+  in_trip: {
+    TRIP_DONE: { status: 'completed', driverId: 'd1' },
+    RIDER_CANCELLED: RIDER_CANCEL,
+    TRIP_ABANDONED: ABANDONED,
+  },
   completed: {},
   cancelled: {},
 };

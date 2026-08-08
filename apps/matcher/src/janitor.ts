@@ -15,6 +15,8 @@ export interface JanitorOptions {
   reconcileIntervalMs?: number;
   /** Max terminal-trip drivers checked per reconcile pass (default 1000). */
   reconcileLimit?: number;
+  /** A trip with no progress for this long is abandoned and its driver retired to offline (default 30m). */
+  tripMaxAgeMs?: number;
   /** Injectable clock (tests). */
   now?: () => number;
 }
@@ -51,6 +53,7 @@ export class Janitor {
   private readonly sweepIntervalMs: number;
   private readonly reconcileIntervalMs: number;
   private readonly reconcileLimit: number;
+  private readonly tripMaxAgeMs: number;
   private readonly now: () => number;
 
   private timer: NodeJS.Timeout | null = null;
@@ -71,6 +74,7 @@ export class Janitor {
     this.sweepIntervalMs = opts.sweepIntervalMs ?? 1_000;
     this.reconcileIntervalMs = opts.reconcileIntervalMs ?? 15_000;
     this.reconcileLimit = opts.reconcileLimit ?? 1_000;
+    this.tripMaxAgeMs = opts.tripMaxAgeMs ?? 1_800_000;
     this.now = opts.now ?? Date.now;
   }
 
@@ -154,6 +158,44 @@ export class Janitor {
     return freed;
   }
 
+  /**
+   * Abandonment reconciler — complements reconcileStuckOnTrip (which frees the
+   * completed-but-not-freed sliver). A driver stuck 'on_trip' on a trip that
+   * stopped progressing past tripMaxAgeMs is retired: driver on_trip → offline
+   * (NEVER back to available, so no double-assignment) and the trip →
+   * cancelled(abandoned). The claim silence-sweep deliberately skips on_trip
+   * drivers, so without this an abandoned driver would hold their slot forever.
+   * Redis is written FIRST so the driver is unclaimable before the trip is
+   * touched; a crash between the two leaves the driver offline and the trip
+   * still live, which the next pass re-selects and finishes (abandonDriver is
+   * an idempotent no-op by then). Returns how many drivers were retired.
+   */
+  async abandonStale(): Promise<number> {
+    const cutoff = new Date(this.now() - this.tripMaxAgeMs);
+    const stale = await this.trips.staleActiveTrips(cutoff, this.reconcileLimit);
+    let retired = 0;
+    for (const { tripId, driverId } of stale) {
+      try {
+        await this.claims.abandonDriver(driverId);
+        if (await this.trips.abandonTrip(tripId)) {
+          retired++;
+          this.metrics.tripsAbandonedTotal++;
+          this.log.warn({ driverId, tripId }, 'abandoned stalled trip; retired driver to offline');
+        }
+      } catch (err) {
+        this.metrics.sweepErrorsTotal++;
+        this.log.error({ err, driverId, tripId }, 'abandon failed');
+      }
+    }
+    return retired;
+  }
+
+  /** One reconcile tick: free completed-but-stuck drivers, then abandon stalled trips. */
+  private async reconcilePass(): Promise<void> {
+    await this.reconcileStuckOnTrip();
+    await this.abandonStale();
+  }
+
   start(): void {
     if (this.timer !== null) return;
     this.timer = setInterval(() => {
@@ -174,7 +216,7 @@ export class Janitor {
     this.reconcileTimer = setInterval(() => {
       if (this.reconcileRunning) return;
       this.reconcileRunning = true;
-      this.reconcileInFlight = this.reconcileStuckOnTrip()
+      this.reconcileInFlight = this.reconcilePass()
         .then(
           () => undefined,
           (err: unknown) => {

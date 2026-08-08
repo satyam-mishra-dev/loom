@@ -433,6 +433,55 @@ export class TripStore {
   }
 
   /**
+   * Trips abandoned mid-ride: a driver stopped progressing (no trip event for
+   * longer than the caller's cutoff) while the trip sits in a live driving
+   * state. Each is driven to cancelled(reason: 'abandoned') in its own locked
+   * TX — re-checking status under the lock so a trip that progressed or was
+   * cancelled in the race is left untouched — and the bound driver returned so
+   * the caller retires it in Redis. Staleness is the trip's LAST event, not its
+   * birth, so a legitimately long ride that keeps reporting is never abandoned.
+   * The rider's request is left as-is (re-matching an abandoned rider is out of
+   * scope — they re-request).
+   */
+  async staleActiveTrips(
+    cutoff: Date,
+    limit: number,
+  ): Promise<Array<{ tripId: string; driverId: string }>> {
+    const res = await this.pool.query<{ id: string; driver_id: string }>(
+      `SELECT t.id, t.driver_id FROM trips t
+       WHERE t.status IN ('matched', 'en_route', 'in_trip')
+         AND (SELECT max(created_at) FROM trip_events e WHERE e.trip_id = t.id) < $1
+       ORDER BY t.id
+       LIMIT $2`,
+      [cutoff, limit],
+    );
+    return res.rows.map((r) => ({ tripId: r.id, driverId: r.driver_id }));
+  }
+
+  /**
+   * Drive one stalled trip to cancelled(reason: 'abandoned') under a row lock.
+   * Returns false if the trip vanished, progressed, or was cancelled in the
+   * race — so the janitor only counts trips it genuinely terminated.
+   */
+  async abandonTrip(tripId: string): Promise<boolean> {
+    return this.inTx(async (client) => {
+      const row = await this.lockTrip(client, tripId);
+      if (row === null) return false;
+      if (row.status !== 'matched' && row.status !== 'en_route' && row.status !== 'in_trip') {
+        return false; // progressed or terminated under the lock — leave it
+      }
+      const next = transition(rowState(row), { type: 'TRIP_ABANDONED' });
+      await client.query('UPDATE trips SET status = $2 WHERE id = $1', [tripId, next.status]);
+      await this.insertEvent(client, tripId, next.status, {
+        event: 'TRIP_ABANDONED',
+        reason: 'abandoned',
+        driverId: row.driver_id,
+      });
+      return true;
+    });
+  }
+
+  /**
    * Rider cancellation. One locked TX flips the trip (and its request) to
    * cancelled; that write is what STOPS an in-flight cascade — its next guarded
    * step (accept/revert/unmatched) then sees a non-'matching' request or a

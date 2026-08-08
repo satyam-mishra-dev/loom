@@ -93,16 +93,25 @@ liveness is the matcher and janitor's concern, not the sweep's. So a driver whos
 socket dies mid-trip keeps its trip: when a per-driver principal reconnects, the
 gateway re-sends the active trip it still owns (`sessions_resumed_total`), the
 driver picks up where it left off, and its resumed pings stay position-only — it
-never re-enters the matchable pool. If the driver truly never comes back the trip
-lingers in its last state; a reconciler keyed on trip age is the upgrade path (an
-honest, logged open item, not a silent corruption).
+never re-enters the matchable pool. If the driver truly never comes back, the
+janitor's abandonment reconciler closes it out: a trip with no progress event for
+`tripMaxAgeMs` (default 30 min) is driven to `cancelled(abandoned)` and its
+stranded driver retired `on_trip → offline` — never re-added to an available set,
+so a driver we forcibly retire still cannot be double-assigned. Redis is retired
+before the trip is cancelled, so a crash between the two writes self-heals on the
+next pass (the driver is already unclaimable; the pass re-selects the still-live
+trip and finishes the cancel). Staleness is measured by the trip's last event,
+not its birth, so a legitimately long ride that keeps reporting is never touched.
 
 **Proof.** The gateway integration suite covers all three: sockets that miss the
 pong deadline are terminated and unbound; the sweep offlines silent idle drivers
 and drops them from the heartbeat ZSET but leaves an on-trip driver `on_trip` and
 tracked; and a driver that reconnects mid-trip gets its active trip re-sent,
 stays `on_trip`, and never rejoins an available set even with an aggressive sweep
-running underneath.
+running underneath. The cascade suite adds the abandonment case: a driver stuck
+`on_trip` on a trip idle past its max age is retired to `offline`, the trip goes
+`cancelled(abandoned)`, and a direct `claimDriver` on the retired driver is
+refused — the double-assignment invariant holds even for a driver we forcibly retire.
 
 ---
 

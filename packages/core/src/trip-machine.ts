@@ -38,7 +38,7 @@ export type TripState =
   | { status: 'en_route'; driverId: string }
   | { status: 'in_trip'; driverId: string }
   | { status: 'completed'; driverId: string }
-  | { status: 'cancelled'; reason: 'unmatched' | 'rider_cancelled' };
+  | { status: 'cancelled'; reason: 'unmatched' | 'rider_cancelled' | 'abandoned' };
 
 export type TripEvent =
   | { type: 'MATCHING_STARTED' }
@@ -50,7 +50,8 @@ export type TripEvent =
   | { type: 'ARRIVED_PICKUP' }
   | { type: 'TRIP_DONE' }
   | { type: 'UNMATCHED' }
-  | { type: 'RIDER_CANCELLED' };
+  | { type: 'RIDER_CANCELLED' }
+  | { type: 'TRIP_ABANDONED' };
 
 export class IllegalTransitionError extends Error {
   constructor(
@@ -77,6 +78,16 @@ export function transition(state: TripState, event: TripEvent): TripState {
       throw new IllegalTransitionError(state.status, event.type);
     }
     return { status: 'cancelled', reason: 'rider_cancelled' };
+  }
+  // The janitor abandons a trip whose driver has gone silent mid-ride. Legal
+  // only from the driver-committed driving states — a bound driver exists to
+  // take out of service. Earlier states have no committed driver (the claim
+  // janitor and cascade reclaim those), so abandonment there is illegal.
+  if (event.type === 'TRIP_ABANDONED') {
+    if (state.status === 'matched' || state.status === 'en_route' || state.status === 'in_trip') {
+      return { status: 'cancelled', reason: 'abandoned' };
+    }
+    throw new IllegalTransitionError(state.status, event.type);
   }
   switch (state.status) {
     case 'requested':

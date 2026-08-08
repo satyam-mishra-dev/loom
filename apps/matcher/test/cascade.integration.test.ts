@@ -733,4 +733,49 @@ describe('offer cascade (testcontainers redis + postgres)', () => {
       redisB.disconnect();
     }
   });
+
+  it('abandonment: a driver stuck on_trip on a stalled trip is retired offline, never re-claimable', async () => {
+    await seedDrivers(1);
+    await pool.query(
+      `INSERT INTO ride_requests (id, lat, lng, dest_lat, dest_lng, status)
+       VALUES ('r1', $1, $2, $3, $4, 'matched')`,
+      [CENTER.lat, CENTER.lng, DEST.lat, DEST.lng],
+    );
+    await pool.query(
+      `INSERT INTO trips (id, request_id, driver_id, rider_lat, rider_lng, status, claim_token, offer_id)
+       VALUES ('trip-1', 'r1', 'd0', $1, $2, 'in_trip', 'tok', 'off-1')`,
+      [CENTER.lat, CENTER.lng],
+    );
+    // Last activity an hour ago — the driver went silent mid-ride.
+    await pool.query(
+      `INSERT INTO trip_events (trip_id, type, payload, created_at)
+       VALUES ('trip-1', 'en_route', '{}', now() - interval '1 hour')`,
+    );
+    // On_trip and OUT of its cell's available set, exactly as a matched driver is.
+    await redis.hset(driverKey('d0'), { status: 'on_trip' });
+    await redis.srem(cellKey(C0), 'd0');
+
+    // Fresh enough under a generous max-age: nothing is abandoned.
+    expect(await new Janitor({ redis, pool, tripMaxAgeMs: 86_400_000 }).abandonStale()).toBe(0);
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('on_trip');
+
+    // Past the max age: the trip is abandoned and the driver retired.
+    const janitor = new Janitor({ redis, pool, tripMaxAgeMs: 60_000 });
+    expect(await janitor.abandonStale()).toBe(1);
+    expect((await pool.query(`SELECT status FROM trips WHERE id = 'trip-1'`)).rows[0]).toEqual({
+      status: 'cancelled',
+    });
+    expect((await eventChain('trip-1')).at(-1)).toBe('cancelled');
+    // Retired to offline, NOT available, and gone from the matchable set.
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('offline');
+    expect(await redis.smembers(cellKey(C0))).toEqual([]);
+
+    // THE INVARIANT: a retired driver can never be claimed for a new trip.
+    const claims = new ClaimStore(redis);
+    expect(await claims.claimDriver('d0', 'trip-2', Date.now(), 10_000, 60_000)).toBeNull();
+
+    // Idempotent: a second pass finds nothing and changes nothing.
+    expect(await janitor.abandonStale()).toBe(0);
+    expect(await redis.hget(driverKey('d0'), 'status')).toBe('offline');
+  });
 });

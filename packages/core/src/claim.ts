@@ -157,6 +157,22 @@ if cell then redis.call('SADD', 'cell:' .. cell .. ':available', ARGV[1]) end
 return 1
 `;
 
+// KEYS[1] driver:{id}
+// ARGV[1] driverId
+// Abandonment: a driver stuck 'on_trip' on a trip that stopped progressing is
+// taken OUT of service — on_trip → offline. Unlike FREE_LUA this NEVER re-adds
+// the driver to a cell's available set, so an abandoned driver can never be
+// re-claimed (claimDriver requires 'available' + set membership) — the
+// double-assignment invariant holds even for a driver we forcibly retired.
+// Guarded on status, so it is a no-op for a driver that has since completed,
+// been freed, or already gone offline.
+const ABANDON_LUA = `
+local status = redis.call('HGET', KEYS[1], 'status')
+if status ~= 'on_trip' then return 0 end
+redis.call('HSET', KEYS[1], 'status', 'offline')
+return 1
+`;
+
 // KEYS[1] claim:{id}  KEYS[2] driver:{id}
 // ARGV[1] driverId  ARGV[2] nowMs
 // The janitor's atomic release: re-read the claim UNDER the script (it may
@@ -257,6 +273,7 @@ interface ClaimCommands {
     token: string,
   ): Promise<number>;
   flFreeDriver(driverKey: string, driverId: string): Promise<number>;
+  flAbandonDriver(driverKey: string, driverId: string): Promise<number>;
   flCancelDriver(
     claimKey: string,
     driverKey: string,
@@ -283,6 +300,7 @@ export class ClaimStore {
     redis.defineCommand('flConfirmClaim', { numberOfKeys: 2, lua: CONFIRM_LUA });
     redis.defineCommand('flReleaseClaim', { numberOfKeys: 2, lua: RELEASE_LUA });
     redis.defineCommand('flFreeDriver', { numberOfKeys: 1, lua: FREE_LUA });
+    redis.defineCommand('flAbandonDriver', { numberOfKeys: 1, lua: ABANDON_LUA });
     redis.defineCommand('flCancelDriver', { numberOfKeys: 2, lua: CANCEL_DRIVER_LUA });
     redis.defineCommand('flJanitorRelease', { numberOfKeys: 2, lua: JANITOR_LUA });
     this.redis = redis as Redis & ClaimCommands;
@@ -353,6 +371,15 @@ export class ClaimStore {
   /** Trip completed: on_trip → available in the driver's current cell. No-op unless on_trip. */
   async freeDriver(driverId: string): Promise<boolean> {
     return (await this.redis.flFreeDriver(driverKey(driverId), driverId)) === 1;
+  }
+
+  /**
+   * Trip abandoned (driver went silent mid-ride): on_trip → offline, WITHOUT
+   * re-adding to any available set, so the retired driver can never be
+   * re-claimed. No-op unless still on_trip. Returns true if it retired the driver.
+   */
+  async abandonDriver(driverId: string): Promise<boolean> {
+    return (await this.redis.flAbandonDriver(driverKey(driverId), driverId)) === 1;
   }
 
   /**

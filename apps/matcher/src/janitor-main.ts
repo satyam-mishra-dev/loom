@@ -21,12 +21,13 @@ function envInt(name: string, fallback: number): number {
 const redisUrl = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6381';
 const databaseUrl = process.env['DATABASE_URL'] ?? 'postgres://loom:loom@127.0.0.1:5434/loom';
 const sweepIntervalMs = envInt('JANITOR_SWEEP_MS', 1_000);
+const tripMaxAgeMs = envInt('JANITOR_TRIP_MAX_AGE_MS', 1_800_000);
 
 const log = pino({ name: 'janitor' });
 const redis = new Redis(redisUrl);
 const pool = createPool(databaseUrl);
 
-const janitor = new Janitor({ redis, pool, log, sweepIntervalMs });
+const janitor = new Janitor({ redis, pool, log, sweepIntervalMs, tripMaxAgeMs });
 janitor.start();
 log.info({ sweepIntervalMs }, 'janitor started');
 
